@@ -1,0 +1,995 @@
+use crate::common::{data_dir, Config};
+use crate::theme;
+use chrono::Local;
+use eframe::egui::{self, Color32, FontId, Pos2, Rect, ScrollArea, Stroke};
+use rdev::{grab, Button, Event, EventType};
+use rusqlite::{params, Connection};
+use std::fs;
+use std::io::Write;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Sender};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
+use xcap::Monitor;
+
+fn log_error(msg: &str) {
+    let log_path = data_dir().join("error.log");
+    let _ = fs::create_dir_all(data_dir());
+    if let Ok(mut f) = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+    {
+        let _ = writeln!(
+            f,
+            "[{}] {}",
+            Local::now().format("%Y-%m-%d %H:%M:%S"),
+            msg
+        );
+    }
+}
+
+pub fn setup_panic_hook() {
+    std::panic::set_hook(Box::new(|info| {
+        let msg = match info.payload().downcast_ref::<&str>() {
+            Some(s) => s.to_string(),
+            None => match info.payload().downcast_ref::<String>() {
+                Some(s) => s.clone(),
+                None => format!("{:?}", info),
+            },
+        };
+        let loc = info.location().map(|l| l.to_string()).unwrap_or_default();
+        let full = if loc.is_empty() {
+            msg
+        } else {
+            format!("{} at {}", msg, loc)
+        };
+        log_error(&full);
+    }));
+}
+
+fn get_next_state_suffix(current: &str) -> String {
+    let suffixes = ["-n", "-s", "-h", "-d", "-f", "-a", "-p"];
+    for i in 0..suffixes.len() - 1 {
+        if current == suffixes[i] {
+            return suffixes[i + 1].to_string();
+        }
+    }
+    "-n".to_string()
+}
+
+fn get_resolution() -> (u32, u32) {
+    Monitor::all()
+        .ok()
+        .and_then(|m| {
+            m.first()
+                .map(|mon| (mon.width().unwrap_or(1920), mon.height().unwrap_or(1080)))
+        })
+        .unwrap_or((1920, 1080))
+}
+
+fn init_db(path: &str) -> Connection {
+    if let Some(parent) = std::path::Path::new(path).parent() {
+        fs::create_dir_all(parent).expect("Failed to create DB directory");
+    }
+    let conn = Connection::open(path).expect("Failed to open DB");
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS elements (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            center_x INTEGER NOT NULL, center_y INTEGER NOT NULL,
+            bbox_x INTEGER NOT NULL, bbox_y INTEGER NOT NULL,
+            bbox_width INTEGER NOT NULL, bbox_height INTEGER NOT NULL,
+            screen_width INTEGER NOT NULL, screen_height INTEGER NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS element_states (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            element_id INTEGER NOT NULL,
+            state_name TEXT NOT NULL, image_path TEXT NOT NULL,
+            is_primary BOOLEAN NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (element_id) REFERENCES elements(id)
+        );",
+    )
+    .expect("Fail DB init");
+    conn
+}
+
+#[derive(Clone)]
+struct ElementRec {
+    id: i32,
+    name: String,
+    cx: i32,
+    cy: i32,
+    states: Vec<(String, bool)>,
+}
+
+fn load_elements(conn: &Connection) -> Vec<ElementRec> {
+    let mut res = Vec::new();
+    if let Ok(mut st) = conn.prepare("SELECT id,name,center_x,center_y FROM elements ORDER BY id") {
+        if let Ok(rows) = st.query_map([], |r| {
+            Ok((
+                r.get::<_, i32>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i32>(2)?,
+                r.get::<_, i32>(3)?,
+            ))
+        }) {
+            for row in rows.flatten() {
+                let (id, name, cx, cy) = row;
+                let mut states = Vec::new();
+                if let Ok(mut s2) = conn.prepare(
+                    "SELECT state_name,is_primary FROM element_states WHERE element_id=?1 ORDER BY id",
+                ) {
+                    if let Ok(r2) = s2.query_map(params![id], |r| {
+                        Ok((r.get::<_, String>(0)?, r.get::<_, bool>(1)?))
+                    }) {
+                        for st in r2.flatten() {
+                            states.push(st);
+                        }
+                    }
+                }
+                res.push(ElementRec {
+                    id,
+                    name,
+                    cx,
+                    cy,
+                    states,
+                });
+            }
+        }
+    }
+    res
+}
+
+fn export_csv(conn: &Connection, name: &str, cfg: &Config) -> Result<String, String> {
+    let ts = Local::now().format("%Y%m%d_%H%M%S");
+    let out_dir = cfg.image_dir();
+    let path = std::path::Path::new(&out_dir).join(format!("{}_{}.csv", name, ts));
+    let path_s = path.to_string_lossy().to_string();
+    let mut f = fs::File::create(&path).map_err(|e| e.to_string())?;
+    f.write_all(b"\xEF\xBB\xBF").map_err(|e| e.to_string())?;
+    writeln!(
+        f,
+        "id,x,y,description,template_path,original_width,original_height"
+    )
+    .map_err(|e| e.to_string())?;
+    let mut st = conn
+        .prepare(
+            "SELECT e.id,e.name,e.center_x,e.center_y,es.image_path,e.screen_width,e.screen_height
+         FROM elements e JOIN element_states es ON e.id=es.element_id AND es.is_primary=1 ORDER BY e.id",
+        )
+        .map_err(|e| e.to_string())?;
+    for row in st
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, i32>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i32>(2)?,
+                r.get::<_, i32>(3)?,
+                r.get::<_, String>(4)?,
+                r.get::<_, i32>(5)?,
+                r.get::<_, i32>(6)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?
+        .flatten()
+    {
+        let (id, name, cx, cy, img, sw, sh) = row;
+        let img_path = std::path::Path::new(&out_dir)
+            .join(&img)
+            .to_string_lossy()
+            .to_string();
+        writeln!(
+            f,
+            "{},{},{},\"{}\",\"{}\",{},{}",
+            id,
+            cx,
+            cy,
+            name.replace('"', "\"\""),
+            img_path.replace('"', "\"\""),
+            sw,
+            sh
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(path_s)
+}
+
+fn create_elem(
+    conn: &Connection,
+    name: &str,
+    state: &str,
+    x1: i32,
+    y1: i32,
+    x2: i32,
+    y2: i32,
+    img: &str,
+    sw: u32,
+    sh: u32,
+) -> Result<i32, String> {
+    let cx = x1.min(x2) + (x1 - x2).abs() / 2;
+    let cy = y1.min(y2) + (y1 - y2).abs() / 2;
+    let ts = Local::now().format("%Y%m%d_%H%M%S").to_string();
+    let bx = x1.min(x2);
+    let by = y1.min(y2);
+    let bw = (x1 - x2).abs() as u32;
+    let bh = (y1 - y2).abs() as u32;
+    conn.execute(
+        "INSERT INTO elements(name,center_x,center_y,bbox_x,bbox_y,bbox_width,bbox_height,screen_width,screen_height,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+        params![name, cx, cy, bx, by, bw, bh, sw, sh, ts],
+    )
+    .map_err(|e| e.to_string())?;
+    let id = conn.last_insert_rowid() as i32;
+    let fname = std::path::Path::new(img)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(img)
+        .to_string();
+    conn.execute(
+        "INSERT INTO element_states(element_id,state_name,image_path,is_primary,created_at) VALUES(?1,?2,?3,1,?4)",
+        params![id, state, fname, ts],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(id)
+}
+
+enum AppMode {
+    Normal,
+    Capturing,
+    InputName(i32, i32, i32, i32, String),
+    InputState(i32, i32, i32, i32, String, String, String),
+    InputExport,
+}
+
+enum CaptureMsg {
+    Down(f64, f64),
+    Up(f64, f64),
+    Move(f64, f64),
+}
+
+fn start_listener(flag: Arc<AtomicBool>, tx: Sender<CaptureMsg>) {
+    thread::spawn(move || {
+        let last_pos: Arc<Mutex<(f64, f64)>> = Arc::new(Mutex::new((0.0, 0.0)));
+        let last_pos_cb = Arc::clone(&last_pos);
+        let cb = move |event: Event| -> Option<Event> {
+            let capturing = flag.load(Ordering::Relaxed);
+            match event.event_type {
+                EventType::MouseMove { x, y } => {
+                    if let Ok(mut pos) = last_pos_cb.lock() {
+                        *pos = (x, y);
+                    }
+                    if capturing {
+                        let _ = tx.send(CaptureMsg::Move(x, y));
+                    }
+                    Some(event)
+                }
+                EventType::ButtonPress(Button::Left) => {
+                    if capturing {
+                        if let Ok(pos) = last_pos_cb.lock() {
+                            let _ = tx.send(CaptureMsg::Down(pos.0, pos.1));
+                        }
+                        None
+                    } else {
+                        Some(event)
+                    }
+                }
+                EventType::ButtonRelease(Button::Left) => {
+                    if capturing {
+                        if let Ok(pos) = last_pos_cb.lock() {
+                            let _ = tx.send(CaptureMsg::Up(pos.0, pos.1));
+                        }
+                        None
+                    } else {
+                        Some(event)
+                    }
+                }
+                _ => Some(event),
+            }
+        };
+        if let Err(e) = grab(cb) {
+            log_error(&format!("rdev grab error: {:?}", e));
+        }
+    });
+}
+
+pub struct RecorderApp {
+    conn: Connection,
+    config: Config,
+    elements: Vec<ElementRec>,
+    last_id: Option<i32>,
+    last_element_name: Option<String>,
+    last_state_name: Option<String>,
+    is_add_state_mode: bool,
+    sw: u32,
+    sh: u32,
+    scale: f32,
+    mode: AppMode,
+    input: String,
+    status: String,
+    rx: mpsc::Receiver<CaptureMsg>,
+    capture_flag: Arc<AtomicBool>,
+    drag_start: Option<(i32, i32)>,
+    drag_current: Option<(i32, i32)>,
+    mouse_pos: Option<(i32, i32)>,
+    capture_started_at: Option<std::time::Instant>,
+    forced_state_name: Option<String>,
+    image_dir: String,
+    pre_capture: Option<(egui::TextureHandle, image::RgbaImage)>,
+}
+
+impl RecorderApp {
+    pub fn new(config: Config) -> Self {
+        let db_path = config.db_path();
+        let image_dir = config.image_dir();
+        let _ = fs::create_dir_all(&image_dir);
+        let conn = init_db(&db_path);
+        let (sw, sh) = get_resolution();
+        let elems = load_elements(&conn);
+        let last = elems.last().map(|e| e.id);
+        let flag = Arc::new(AtomicBool::new(false));
+        let (tx, rx) = mpsc::channel();
+        start_listener(flag.clone(), tx);
+        Self {
+            conn,
+            config,
+            image_dir,
+            elements: elems,
+            last_id: last,
+            last_element_name: None,
+            last_state_name: None,
+            is_add_state_mode: false,
+            sw,
+            sh,
+            scale: 1.0,
+            mode: AppMode::Normal,
+            input: String::new(),
+            status: "Ready. Click [New Element] to record".into(),
+            rx,
+            capture_flag: flag,
+            drag_start: None,
+            drag_current: None,
+            mouse_pos: None,
+            capture_started_at: None,
+            forced_state_name: None,
+            pre_capture: None,
+        }
+    }
+
+    pub fn is_capturing(&self) -> bool {
+        matches!(self.mode, AppMode::Capturing)
+    }
+
+    /// Agent entrypoint: current human-readable recorder status.
+    pub fn status_text(&self) -> &str {
+        &self.status
+    }
+
+    /// Agent entrypoint: latest cached element count.
+    pub fn element_count(&self) -> usize {
+        self.elements.len()
+    }
+
+    /// Agent entrypoint: refresh local list from DB.
+    pub fn agent_refresh(&mut self) {
+        self.refresh();
+        self.status = "Refreshed by agent".into();
+    }
+
+    /// Agent entrypoint: start a new-element capture flow.
+    pub fn agent_start_new_capture(&mut self, ctx: &egui::Context) {
+        self.forced_state_name = None;
+        self.begin_capture(ctx, false);
+    }
+
+    /// Agent entrypoint: start add-state capture for current element.
+    pub fn agent_start_add_state_capture(&mut self, ctx: &egui::Context, forced_state: Option<String>) {
+        self.forced_state_name = forced_state;
+        self.begin_capture(ctx, true);
+    }
+
+    /// Agent entrypoint: export current primary templates to CSV.
+    pub fn agent_export_csv(&mut self, name: &str) -> Result<String, String> {
+        let path = export_csv(&self.conn, name, &self.config)?;
+        self.status = format!("Exported by agent: {}", path);
+        Ok(path)
+    }
+
+    fn refresh(&mut self) {
+        self.elements = load_elements(&self.conn);
+        self.last_id = self.elements.last().map(|e| e.id);
+    }
+
+    fn begin_capture(&mut self, ctx: &egui::Context, is_add_state: bool) {
+        self.capture_flag.store(true, Ordering::Relaxed);
+        self.drag_start = None;
+        self.drag_current = None;
+        self.capture_started_at = Some(std::time::Instant::now());
+        self.is_add_state_mode = is_add_state;
+        self.status = "Capturing desktop...".into();
+
+        self.pre_capture = None;
+        if let Ok(monitors) = Monitor::all() {
+            if let Some(mon) = monitors.first() {
+                if let Ok(img) = mon.capture_image() {
+                    let size = [img.width() as usize, img.height() as usize];
+                    let pixels: Vec<egui::Color32> = img
+                        .pixels()
+                        .map(|p| egui::Color32::from_rgba_premultiplied(p[0], p[1], p[2], 255))
+                        .collect();
+                    let color_img = egui::ColorImage { size, pixels };
+                    let tex = ctx.load_texture("desktop-bg", color_img, egui::TextureOptions::LINEAR);
+                    self.pre_capture = Some((tex, img));
+                    self.status = "Click and drag on screen to select region...".into();
+                }
+            }
+        }
+        if self.pre_capture.is_none() {
+            self.status = "Failed to capture desktop".into();
+            self.capture_flag.store(false, Ordering::Relaxed);
+            return;
+        }
+
+        self.mode = AppMode::Capturing;
+        ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(0.0, 0.0)));
+        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
+            self.sw as f32 / self.scale,
+            self.sh as f32 / self.scale,
+        )));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(false));
+        ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(
+            egui::WindowLevel::AlwaysOnTop,
+        ));
+    }
+
+    fn end_capture(&mut self, ctx: &egui::Context) {
+        self.capture_flag.store(false, Ordering::Relaxed);
+        self.capture_started_at = None;
+        self.drag_start = None;
+        self.drag_current = None;
+        self.mouse_pos = None;
+        self.pre_capture = None;
+        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(true));
+        ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(
+            egui::WindowLevel::Normal,
+        ));
+        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(700.0, 550.0)));
+        ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(100.0, 100.0)));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        ctx.send_viewport_cmd(egui::ViewportCommand::RequestUserAttention(
+            egui::UserAttentionType::Critical,
+        ));
+        log_error("end_capture done: restored window");
+    }
+
+    pub fn ui(&mut self, ctx: &egui::Context) {
+        ctx.request_repaint_after(Duration::from_millis(16));
+        self.scale = ctx.pixels_per_point();
+
+        match &self.mode {
+            AppMode::Capturing => {
+                if let Some(started) = self.capture_started_at {
+                    if started.elapsed().as_secs() >= 30 {
+                        self.end_capture(ctx);
+                        self.mode = AppMode::Normal;
+                        self.status = "Capture timed out (30s)".into();
+                    }
+                }
+                while let Ok(msg) = self.rx.try_recv() {
+                    match msg {
+                        CaptureMsg::Down(x, y) => {
+                            self.drag_start = Some((x as i32, y as i32));
+                            self.drag_current = Some((x as i32, y as i32));
+                            self.status = format!(
+                                "Drag started ({},{}), release to finish",
+                                x as i32, y as i32
+                            );
+                        }
+                        CaptureMsg::Move(x, y) => {
+                            self.mouse_pos = Some((x as i32, y as i32));
+                            if self.drag_start.is_some() {
+                                self.drag_current = Some((x as i32, y as i32));
+                            }
+                        }
+                        CaptureMsg::Up(x, y) => {
+                            log_error("capture up start");
+                            let saved_start = self.drag_start.take();
+                            let pre_img = self.pre_capture.take();
+                            self.capture_flag.store(false, Ordering::Relaxed);
+                            self.capture_started_at = None;
+                            self.drag_start = None;
+                            self.drag_current = None;
+                            self.mouse_pos = None;
+
+                            let result = match (saved_start, pre_img) {
+                                (Some((sx, sy)), Some(full)) => {
+                                    let px = sx.min(x as i32);
+                                    let py = sy.min(y as i32);
+                                    let pw = (sx - x as i32).abs() as u32;
+                                    let ph = (sy - y as i32).abs() as u32;
+                                    if pw == 0 || ph == 0 {
+                                        Err("Zero region".into())
+                                    } else {
+                                        let lpx = (px as u32).min(full.1.width().saturating_sub(1));
+                                        let lpy = (py as u32).min(full.1.height().saturating_sub(1));
+                                        let lpw = pw.min(full.1.width().saturating_sub(lpx));
+                                        let lph = ph.min(full.1.height().saturating_sub(lpy));
+                                        if lpw == 0 || lph == 0 {
+                                            Err("Region out of bounds".into())
+                                        } else {
+                                            let ts = Local::now().format("%Y%m%d_%H%M%S_%3f");
+                                            let img_dir = &self.image_dir;
+                                            let _ = fs::create_dir_all(img_dir);
+                                            let path = std::path::Path::new(img_dir)
+                                                .join(format!("capture_{}.png", ts));
+                                            let path_s = path.to_string_lossy().to_string();
+                                            let mut cropped = image::ImageBuffer::new(lpw, lph);
+                                            for dy in 0..lph {
+                                                for dx in 0..lpw {
+                                                    cropped.put_pixel(
+                                                        dx,
+                                                        dy,
+                                                        *full.1.get_pixel(lpx + dx, lpy + dy),
+                                                    );
+                                                }
+                                            }
+                                            match cropped.save(&path) {
+                                                Ok(_) => Ok((
+                                                    px as i32,
+                                                    py as i32,
+                                                    (px + pw as i32) as i32,
+                                                    (py + ph as i32) as i32,
+                                                    path_s,
+                                                )),
+                                                Err(e) => Err(format!("Save failed: {}", e)),
+                                            }
+                                        }
+                                    }
+                                }
+                                (None, _) => Err("Cancelled".into()),
+                                (_, None) => Err("No pre-captured image".into()),
+                            };
+
+                            self.end_capture(ctx);
+
+                            match result {
+                                Ok((x1, y1, x2, y2, img_path)) => {
+                                    log_error(&format!("capture success: {}", img_path));
+                                    if self.is_add_state_mode {
+                                        if let (Some(elem_name), Some(last_state)) = (
+                                            self.last_element_name.clone(),
+                                            self.last_state_name.clone(),
+                                        ) {
+                                            let next_state = self
+                                                .forced_state_name
+                                                .take()
+                                                .unwrap_or_else(|| get_next_state_suffix(&last_state));
+                                            let new_path = std::path::Path::new(&self.image_dir)
+                                                .join(format!("{}_{}.png", elem_name, next_state))
+                                                .to_string_lossy()
+                                                .to_string();
+                                            let img_path =
+                                                if std::fs::rename(&img_path, &new_path).is_ok() {
+                                                    new_path
+                                                } else {
+                                                    img_path
+                                                };
+                                            let fname = std::path::Path::new(&img_path)
+                                                .file_name()
+                                                .and_then(|s| s.to_str())
+                                                .unwrap_or(&img_path)
+                                                .to_string();
+                                            if let Some(id) = self.last_id {
+                                                let ts = Local::now()
+                                                    .format("%Y%m%d_%H%M%S")
+                                                    .to_string();
+                                                match self.conn.execute(
+                                                    "INSERT INTO element_states(element_id,state_name,image_path,is_primary,created_at) VALUES(?1,?2,?3,0,?4)",
+                                                    params![id, next_state, fname, ts],
+                                                ) {
+                                                    Ok(_) => {
+                                                        self.last_state_name =
+                                                            Some(next_state.clone());
+                                                        self.status =
+                                                            format!("State '{}' added!", next_state);
+                                                        self.refresh();
+                                                    }
+                                                    Err(e) => {
+                                                        self.status = format!("Error: {}", e)
+                                                    }
+                                                }
+                                            }
+                                        } else {
+                                            self.status = "No element selected".into();
+                                        }
+                                        self.mode = AppMode::Normal;
+                                    } else {
+                                        self.mode = AppMode::InputName(x1, y1, x2, y2, img_path);
+                                        self.input.clear();
+                                        self.status = "Enter element name:".into();
+                                    }
+                                }
+                                Err(e) => {
+                                    self.mode = AppMode::Normal;
+                                    self.status = e;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::none().fill(Color32::BLACK))
+                    .show(ctx, |ui| {
+                        let painter = ui.painter();
+                        let sw = self.sw as f32 / self.scale;
+                        let sh = self.sh as f32 / self.scale;
+
+                        if let Some((tex, _)) = &self.pre_capture {
+                            let bg_rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(sw, sh));
+                            painter.image(
+                                tex.id(),
+                                bg_rect,
+                                Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+                                Color32::WHITE,
+                            );
+                        }
+
+                        let dim = Color32::from_black_alpha(160);
+                        let cross_color = Color32::from_rgba_premultiplied(255, 255, 255, 180);
+
+                        if let (Some((sx, sy)), Some((cx, cy))) =
+                            (self.drag_start, self.drag_current)
+                        {
+                            let x1 = (sx.min(cx)) as f32;
+                            let y1 = (sy.min(cy)) as f32;
+                            let x2 = (sx.max(cx)) as f32;
+                            let y2 = (sy.max(cy)) as f32;
+
+                            painter.rect_filled(
+                                Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(sw, y1)),
+                                0.0,
+                                dim,
+                            );
+                            painter.rect_filled(
+                                Rect::from_min_max(Pos2::new(0.0, y2), Pos2::new(sw, sh)),
+                                0.0,
+                                dim,
+                            );
+                            painter.rect_filled(
+                                Rect::from_min_max(Pos2::new(0.0, y1), Pos2::new(x1, y2)),
+                                0.0,
+                                dim,
+                            );
+                            painter.rect_filled(
+                                Rect::from_min_max(Pos2::new(x2, y1), Pos2::new(sw, y2)),
+                                0.0,
+                                dim,
+                            );
+
+                            let sel = Rect::from_min_max(Pos2::new(x1, y1), Pos2::new(x2, y2));
+                            painter.rect_stroke(sel, 0.0, Stroke::new(2.0, Color32::WHITE));
+                            painter.rect_stroke(
+                                sel,
+                                0.0,
+                                Stroke::new(1.0, Color32::from_rgb(30, 160, 255)),
+                            );
+
+                            for (px, py) in [(x1, y1), (x2, y1), (x1, y2), (x2, y2)] {
+                                painter.rect_filled(
+                                    Rect::from_center_size(Pos2::new(px, py), egui::vec2(8.0, 8.0)),
+                                    0.0,
+                                    Color32::WHITE,
+                                );
+                            }
+                            for (px, py) in [
+                                (x1, (y1 + y2) / 2.0),
+                                (x2, (y1 + y2) / 2.0),
+                                ((x1 + x2) / 2.0, y1),
+                                ((x1 + x2) / 2.0, y2),
+                            ] {
+                                painter.rect_filled(
+                                    Rect::from_center_size(Pos2::new(px, py), egui::vec2(6.0, 6.0)),
+                                    0.0,
+                                    Color32::WHITE,
+                                );
+                            }
+
+                            let w = (x2 - x1) as i32;
+                            let h = (y2 - y1) as i32;
+                            let dims = format!(" {}x{} ", w, h);
+                            let lx = if x2 + 4.0 + dims.len() as f32 * 8.5 < sw {
+                                x2 + 4.0
+                            } else {
+                                x1
+                            };
+                            let ly = if y2 + 24.0 < sh { y2 + 4.0 } else { y1 - 24.0 };
+                            let label_bg = Rect::from_min_size(
+                                Pos2::new(lx, ly),
+                                egui::vec2(dims.len() as f32 * 8.5, 20.0),
+                            );
+                            painter.rect_filled(label_bg, 3.0, Color32::from_rgb(30, 160, 255));
+                            painter.text(
+                                label_bg.center(),
+                                egui::Align2::CENTER_CENTER,
+                                &dims,
+                                FontId::proportional(14.0),
+                                Color32::WHITE,
+                            );
+                        } else {
+                            painter.rect_filled(
+                                Rect::from_min_max(Pos2::ZERO, Pos2::new(sw, sh)),
+                                0.0,
+                                dim,
+                            );
+
+                            if let Some((mx, my)) = self.mouse_pos {
+                                let mx = mx as f32;
+                                let my = my as f32;
+                                painter.line_segment(
+                                    [Pos2::new(0.0, my), Pos2::new(sw, my)],
+                                    Stroke::new(1.0, cross_color),
+                                );
+                                painter.line_segment(
+                                    [Pos2::new(mx, 0.0), Pos2::new(mx, sh)],
+                                    Stroke::new(1.0, cross_color),
+                                );
+
+                                let coord = format!(" ({}, {}) ", mx as i32, my as i32);
+                                let tip_x = if mx + 80.0 < sw {
+                                    mx + 12.0
+                                } else {
+                                    mx - 12.0 - coord.len() as f32 * 7.5
+                                };
+                                let tip_y = if my + 28.0 < sh {
+                                    my + 12.0
+                                } else {
+                                    my - 28.0
+                                };
+                                let tip_bg = Rect::from_min_size(
+                                    Pos2::new(tip_x, tip_y),
+                                    egui::vec2(coord.len() as f32 * 7.5, 20.0),
+                                );
+                                painter.rect_filled(tip_bg, 3.0, Color32::from_black_alpha(200));
+                                painter.text(
+                                    tip_bg.center(),
+                                    egui::Align2::CENTER_CENTER,
+                                    &coord,
+                                    FontId::proportional(13.0),
+                                    Color32::WHITE,
+                                );
+                            }
+
+                            let hint = "Click and drag to select   ESC to cancel";
+                            painter.text(
+                                Pos2::new(sw / 2.0, sh - 40.0),
+                                egui::Align2::CENTER_CENTER,
+                                hint,
+                                FontId::proportional(16.0),
+                                Color32::from_white_alpha(200),
+                            );
+                        }
+
+                        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                            self.end_capture(ctx);
+                            self.mode = AppMode::Normal;
+                            self.status = "Cancelled".into();
+                        }
+                    });
+            }
+            _ => {
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::central_panel(&ctx.style()))
+                    .show(ctx, |ui| {
+                        ui.add_space(4.0);
+                        theme::section_header(
+                            ui,
+                            "元素录制",
+                            &format!("屏幕 {}×{} · 框选区域保存为模板", self.sw, self.sh),
+                        );
+
+                        ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
+                            if self.elements.is_empty() {
+                                ui.colored_label(
+                                    Color32::GRAY,
+                                    "No elements. Click [New Element] to record.",
+                                );
+                            }
+                            for e in &self.elements {
+                                let lab =
+                                    format!("#{} {} ({}, {})", e.id, e.name, e.cx, e.cy);
+                                if Some(e.id) == self.last_id {
+                                    ui.colored_label(Color32::YELLOW, &lab);
+                                } else {
+                                    ui.label(&lab);
+                                }
+                                for (sn, pr) in &e.states {
+                                    let m = if *pr { " [PRIMARY]" } else { "" };
+                                    ui.colored_label(
+                                        Color32::DARK_GRAY,
+                                        format!("  - {}{}", sn, m),
+                                    );
+                                }
+                            }
+                        });
+
+                        ui.separator();
+                        ui.colored_label(Color32::GREEN, &self.status);
+
+                        match &self.mode {
+                            AppMode::Normal => {
+                                ui.horizontal(|ui| {
+                                    if ui.button("New Element  [F5]").clicked()
+                                        || ui.input(|i| i.key_pressed(egui::Key::F5))
+                                    {
+                                        self.forced_state_name = None;
+                                        self.begin_capture(ctx, false);
+                                    }
+                                    if self.last_id.is_some() {
+                                        if ui.button("Add State  [F6]").clicked()
+                                            || ui.input(|i| i.key_pressed(egui::Key::F6))
+                                        {
+                                            self.forced_state_name = None;
+                                            self.begin_capture(ctx, true);
+                                        }
+                                    }
+                                    if ui.button("Export CSV").clicked() {
+                                        self.mode = AppMode::InputExport;
+                                        self.input.clear();
+                                        self.status = "Enter export filename:".into();
+                                    }
+                                    if ui.button("Refresh").clicked() {
+                                        self.refresh();
+                                        self.status = "Refreshed".into();
+                                    }
+                                });
+                                if self.last_id.is_some() {
+                                    ui.separator();
+                                    ui.label("Quick state capture:");
+                                    ui.horizontal(|ui| {
+                                        for (key, label, suffix) in [
+                                            (egui::Key::F1, "F1  Normal (-n)", "-n"),
+                                            (egui::Key::F2, "F2  Selected (-s)", "-s"),
+                                            (egui::Key::F3, "F3  Clicked (-c)", "-c"),
+                                            (egui::Key::F4, "F4  Click+Sel (-cs)", "-cs"),
+                                        ] {
+                                            let pressed = ui.input(|i| i.key_pressed(key));
+                                            if ui.button(label).clicked() || pressed {
+                                                self.forced_state_name = Some(suffix.to_string());
+                                                self.begin_capture(ctx, true);
+                                            }
+                                        }
+                                    });
+                                }
+                            }
+                            AppMode::Capturing => {
+                                ui.colored_label(
+                                    Color32::RED,
+                                    "Click and drag on screen to select region",
+                                );
+                                if ui.button("Cancel").clicked() {
+                                    self.end_capture(ctx);
+                                    self.mode = AppMode::Normal;
+                                    self.status = "Cancelled".into();
+                                }
+                            }
+                            _ => {
+                                let prompt = match &self.mode {
+                                    AppMode::InputName(..) => "Element name:",
+                                    AppMode::InputState(..) => "State name (default: -n):",
+                                    AppMode::InputExport => "Export filename (no extension):",
+                                    _ => "",
+                                };
+                                ui.label(prompt);
+                                let resp = ui.text_edit_singleline(&mut self.input);
+                                ui.horizontal(|ui| {
+                                    if ui.button("OK").clicked()
+                                        || (resp.has_focus()
+                                            && ui.input_mut(|i| i.key_pressed(egui::Key::Enter)))
+                                    {
+                                        let val = self.input.trim().to_string();
+                                        let old =
+                                            std::mem::replace(&mut self.mode, AppMode::Normal);
+                                        match old {
+                                            AppMode::InputName(x1, y1, x2, y2, img)
+                                                if !val.is_empty() =>
+                                            {
+                                                self.mode = AppMode::InputState(
+                                                    x1,
+                                                    y1,
+                                                    x2,
+                                                    y2,
+                                                    img,
+                                                    val,
+                                                    "-n".to_string(),
+                                                );
+                                                self.input.clear();
+                                                self.status =
+                                                    "Enter state name (default: -n):".into();
+                                            }
+                                            AppMode::InputState(
+                                                x1,
+                                                y1,
+                                                x2,
+                                                y2,
+                                                img,
+                                                name,
+                                                default_state,
+                                            ) => {
+                                                let state_name = if val.is_empty() {
+                                                    default_state
+                                                } else {
+                                                    val
+                                                };
+                                                let new_path = std::path::Path::new(&self.image_dir)
+                                                    .join(format!("{}_{}.png", name, state_name))
+                                                    .to_string_lossy()
+                                                    .to_string();
+                                                let img_path =
+                                                    if std::fs::rename(&img, &new_path).is_ok() {
+                                                        new_path
+                                                    } else {
+                                                        img
+                                                    };
+                                                match create_elem(
+                                                    &self.conn,
+                                                    &name,
+                                                    &state_name,
+                                                    x1,
+                                                    y1,
+                                                    x2,
+                                                    y2,
+                                                    &img_path,
+                                                    self.sw,
+                                                    self.sh,
+                                                ) {
+                                                    Ok(id) => {
+                                                        self.last_id = Some(id);
+                                                        self.last_element_name = Some(name.clone());
+                                                        self.last_state_name =
+                                                            Some(state_name.clone());
+                                                        self.status =
+                                                            format!("Element #{} created!", id);
+                                                        self.refresh();
+                                                    }
+                                                    Err(e) => {
+                                                        self.status = format!("Error: {}", e)
+                                                    }
+                                                }
+                                                self.input.clear();
+                                            }
+                                            AppMode::InputExport if !val.is_empty() => {
+                                                match export_csv(&self.conn, &val, &self.config) {
+                                                    Ok(p) => {
+                                                        self.status = format!("Exported: {}", p)
+                                                    }
+                                                    Err(e) => {
+                                                        self.status =
+                                                            format!("Export error: {}", e)
+                                                    }
+                                                }
+                                                self.input.clear();
+                                            }
+                                            _ => {
+                                                self.status = "Cancelled".into();
+                                                self.input.clear();
+                                            }
+                                        }
+                                    }
+                                    if ui.button("Cancel").clicked() {
+                                        self.mode = AppMode::Normal;
+                                        self.input.clear();
+                                        self.status = "Cancelled".into();
+                                    }
+                                });
+                            }
+                        }
+                    });
+            }
+        }
+    }
+}

@@ -1,0 +1,3 @@
+# Paths relative to the executable directory, or absolute paths.
+# db_path = "data/mouse_recorder.db"
+# image_dir = "data"
