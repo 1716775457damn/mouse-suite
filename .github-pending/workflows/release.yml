@@ -21,11 +21,13 @@ jobs:
             target: x86_64-pc-windows-msvc
             artifact: mouse-suite-windows-x86_64.exe
             bin: mouse-suite.exe
-          - os: ubuntu-22.04
+          # xcap 0.9+ needs PipeWire headers newer than Ubuntu 22.04 ships
+          - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             artifact: mouse-suite-linux-x86_64
             bin: mouse-suite
-          - os: macos-13
+          # Cross-compile Intel mac from Apple Silicon (macos-13 runners queue forever)
+          - os: macos-14
             target: x86_64-apple-darwin
             artifact: mouse-suite-macos-x86_64
             bin: mouse-suite
@@ -67,6 +69,7 @@ jobs:
           Copy-Item config.toml dist/
           Copy-Item AGENT_BRIDGE.md dist/
           Copy-Item README.md dist/
+          if (Test-Path workflows) { Copy-Item workflows dist/ -Recurse -Force }
           Compress-Archive -Path dist\* -DestinationPath "dist/${{ matrix.artifact }}.zip" -Force
 
       - name: Prepare artifact (Unix)
@@ -76,8 +79,9 @@ jobs:
           cp "target/${{ matrix.target }}/release/${{ matrix.bin }}" "dist/${{ matrix.artifact }}"
           chmod +x "dist/${{ matrix.artifact }}"
           cp config.toml AGENT_BRIDGE.md README.md dist/
+          if [ -d workflows ]; then cp -r workflows dist/; fi
           tar -C dist -czf "dist/${{ matrix.artifact }}.tar.gz" \
-            "${{ matrix.artifact }}" config.toml AGENT_BRIDGE.md README.md
+            --exclude='*.zip' --exclude='*.tar.gz' .
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
