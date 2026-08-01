@@ -1,3 +1,6 @@
 # Paths relative to the executable directory, or absolute paths.
 # db_path = "data/mouse_recorder.db"
 # image_dir = "data"
+
+# Milliseconds to wait after hiding the app UI before starting screenshot (500–3000).
+hide_wait_ms = 1500

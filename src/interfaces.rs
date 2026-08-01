@@ -48,6 +48,12 @@ pub trait ClickerAgentInterface {
     fn agent_logs(&self) -> Vec<String>;
     fn agent_set_delay_ms(&mut self, delay_ms: u64);
     fn agent_set_element_folder(&mut self, folder: String);
+    fn agent_set_match_threshold(&mut self, threshold: f32);
+    fn agent_set_pure_vision(&mut self, enabled: bool);
+    fn agent_set_retries(&mut self, retries: u32);
+    fn agent_set_retry_ms(&mut self, retry_ms: u64);
+    fn agent_set_on_fail(&mut self, on_fail: &str) -> Result<(), String>;
+    fn agent_set_save_match_debug(&mut self, enabled: bool);
     fn agent_stop(&mut self, ctx: &egui::Context);
     fn agent_load_workflow(&mut self, path: &str) -> Result<usize, String>;
     fn agent_set_workflow_steps(&mut self, steps: Vec<WorkflowStep>);
@@ -71,6 +77,33 @@ impl ClickerAgentInterface for ClickerApp {
 
     fn agent_set_element_folder(&mut self, folder: String) {
         ClickerApp::set_element_folder(self, folder);
+    }
+
+    fn agent_set_match_threshold(&mut self, threshold: f32) {
+        ClickerApp::set_match_threshold(self, threshold);
+    }
+
+    fn agent_set_pure_vision(&mut self, enabled: bool) {
+        ClickerApp::set_pure_vision(self, enabled);
+    }
+
+    fn agent_set_retries(&mut self, retries: u32) {
+        ClickerApp::set_retries(self, retries);
+    }
+
+    fn agent_set_retry_ms(&mut self, retry_ms: u64) {
+        ClickerApp::set_retry_ms(self, retry_ms);
+    }
+
+    fn agent_set_on_fail(&mut self, on_fail: &str) -> Result<(), String> {
+        let action = crate::workflow::ClickFailAction::parse(on_fail)
+            .ok_or_else(|| "on_fail must be skip|abort".to_string())?;
+        ClickerApp::set_on_fail(self, action);
+        Ok(())
+    }
+
+    fn agent_set_save_match_debug(&mut self, enabled: bool) {
+        ClickerApp::set_save_match_debug(self, enabled);
     }
 
     fn agent_stop(&mut self, ctx: &egui::Context) {
@@ -108,6 +141,10 @@ pub trait FlowEditorAgentInterface {
     fn agent_compile_steps(&self) -> Result<Vec<WorkflowStep>, String>;
     fn agent_load_flow(&mut self, path: &str) -> Result<(), String>;
     fn agent_save_flow(&mut self, path: &str) -> Result<(), String>;
+    fn agent_auto_layout(&mut self);
+    fn agent_duplicate_selection(&mut self) -> usize;
+    fn agent_undo(&mut self) -> bool;
+    fn agent_redo(&mut self) -> bool;
 }
 
 impl FlowEditorAgentInterface for FlowEditor {
@@ -145,5 +182,21 @@ impl FlowEditorAgentInterface for FlowEditor {
 
     fn agent_save_flow(&mut self, path: &str) -> Result<(), String> {
         FlowEditor::agent_save(self, path)
+    }
+
+    fn agent_auto_layout(&mut self) {
+        FlowEditor::agent_auto_layout(self);
+    }
+
+    fn agent_duplicate_selection(&mut self) -> usize {
+        FlowEditor::agent_duplicate_selection(self)
+    }
+
+    fn agent_undo(&mut self) -> bool {
+        FlowEditor::agent_undo(self)
+    }
+
+    fn agent_redo(&mut self) -> bool {
+        FlowEditor::agent_redo(self)
     }
 }

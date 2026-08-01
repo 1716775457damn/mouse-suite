@@ -67,6 +67,7 @@ jobs:
           Copy-Item config.toml dist/
           Copy-Item AGENT_BRIDGE.md dist/
           Copy-Item README.md dist/
+          if (Test-Path workflows) { Copy-Item workflows dist/ -Recurse -Force }
           Compress-Archive -Path dist\* -DestinationPath "dist/${{ matrix.artifact }}.zip" -Force
 
       - name: Prepare artifact (Unix)
@@ -76,8 +77,9 @@ jobs:
           cp "target/${{ matrix.target }}/release/${{ matrix.bin }}" "dist/${{ matrix.artifact }}"
           chmod +x "dist/${{ matrix.artifact }}"
           cp config.toml AGENT_BRIDGE.md README.md dist/
+          if [ -d workflows ]; then cp -r workflows dist/; fi
           tar -C dist -czf "dist/${{ matrix.artifact }}.tar.gz" \
-            "${{ matrix.artifact }}" config.toml AGENT_BRIDGE.md README.md
+            --exclude='*.zip' --exclude='*.tar.gz' .
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4

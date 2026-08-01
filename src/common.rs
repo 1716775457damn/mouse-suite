@@ -1,5 +1,5 @@
 use eframe::egui;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -16,10 +16,25 @@ pub fn data_dir() -> &'static Path {
     DIR.get_or_init(|| exe_dir().join("data"))
 }
 
-#[derive(Deserialize, Clone)]
+/// Shared element library entry (recorder gallery + flow picker).
+#[derive(Clone, Debug)]
+pub struct ElementCatalogItem {
+    pub name: String,
+    /// Absolute path to primary template image (may be missing on disk).
+    pub preview_path: String,
+}
+
+#[derive(Deserialize, Serialize, Clone)]
 pub struct Config {
     pub db_path: Option<String>,
     pub image_dir: Option<String>,
+    /// Milliseconds to wait after hiding UI before capturing (500–3000).
+    #[serde(default = "default_hide_wait_ms")]
+    pub hide_wait_ms: u64,
+}
+
+fn default_hide_wait_ms() -> u64 {
+    1500
 }
 
 impl Config {
@@ -29,6 +44,23 @@ impl Config {
             .ok()
             .and_then(|content| toml::from_str(&content).ok())
             .unwrap_or_default()
+    }
+
+    pub fn save(&self) {
+        let config_path = exe_dir().join("config.toml");
+        let mut doc = String::from(
+            "# Paths relative to the executable directory, or absolute paths.\n\
+             # db_path = \"data/mouse_recorder.db\"\n\
+             # image_dir = \"data\"\n",
+        );
+        doc.push_str(&format!("hide_wait_ms = {}\n", self.hide_wait_ms.clamp(500, 3000)));
+        if let Some(ref p) = self.db_path {
+            doc.push_str(&format!("db_path = \"{}\"\n", p.replace('\\', "\\\\")));
+        }
+        if let Some(ref p) = self.image_dir {
+            doc.push_str(&format!("image_dir = \"{}\"\n", p.replace('\\', "\\\\")));
+        }
+        let _ = std::fs::write(config_path, doc);
     }
 
     pub fn resolve(&self, path: &str) -> PathBuf {
@@ -58,6 +90,10 @@ impl Config {
             .map(|p| self.resolve(p).to_string_lossy().to_string())
             .unwrap_or_else(|| data_dir().to_string_lossy().to_string())
     }
+
+    pub fn hide_wait_ms(&self) -> u64 {
+        self.hide_wait_ms.clamp(500, 3000)
+    }
 }
 
 impl Default for Config {
@@ -65,19 +101,22 @@ impl Default for Config {
         Self {
             db_path: None,
             image_dir: None,
+            hide_wait_ms: 1500,
         }
     }
 }
 
 pub fn setup_chinese_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
-    let font_paths = [
+
+    // Prefer clean CJK + SF-like Latin pairing on Windows.
+    let cn_candidates = [
         "C:\\Windows\\Fonts\\msyh.ttc",
         "C:\\Windows\\Fonts\\msyhbd.ttc",
-        "C:\\Windows\\Fonts\\simsun.ttc",
         "C:\\Windows\\Fonts\\simhei.ttf",
+        "C:\\Windows\\Fonts\\simsun.ttc",
     ];
-    for path in &font_paths {
+    for path in &cn_candidates {
         if let Ok(data) = std::fs::read(path) {
             fonts.font_data.insert(
                 "cn_font".to_owned(),
@@ -96,5 +135,27 @@ pub fn setup_chinese_fonts(ctx: &egui::Context) {
             break;
         }
     }
+
+    // Segoe UI Variable / Semibold — closest SF Pro stand-in on Windows.
+    for path in [
+        "C:\\Windows\\Fonts\\SegoeUI-VF.ttf",
+        "C:\\Windows\\Fonts\\segoeuib.ttf",
+        "C:\\Windows\\Fonts\\seguisb.ttf",
+        "C:\\Windows\\Fonts\\segoeui.ttf",
+    ] {
+        if let Ok(data) = std::fs::read(path) {
+            fonts.font_data.insert(
+                "ui_latin".to_owned(),
+                std::sync::Arc::new(egui::FontData::from_owned(data)),
+            );
+            fonts
+                .families
+                .get_mut(&egui::FontFamily::Proportional)
+                .unwrap()
+                .push("ui_latin".to_owned());
+            break;
+        }
+    }
+
     ctx.set_fonts(fonts);
 }

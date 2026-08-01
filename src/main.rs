@@ -4,19 +4,27 @@ mod agent_bridge;
 mod clicker;
 mod common;
 mod flow;
+mod flow_ai;
+mod flow_md;
+mod hotkeys;
 mod interfaces;
 mod recorder;
+mod screen;
+mod scribe;
+mod scribe_ai;
 mod theme;
 mod workflow;
 
 use agent_bridge::{AgentBridge, AgentCommand, AgentResponse};
 use clicker::ClickerApp;
 use common::{setup_chinese_fonts, Config};
-use eframe::egui;
+use eframe::egui::{self, Color32};
 use flow::FlowEditor;
 use flow::NodeKind;
+use hotkeys::{HotkeyBus, HotkeyEvent};
 use interfaces::{ClickerAgentInterface, FlowEditorAgentInterface, RecorderAgentInterface};
 use recorder::{setup_panic_hook, RecorderApp};
+use scribe::ScribeApp;
 use serde_json::{json, Value};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -24,6 +32,7 @@ enum Tab {
     Recorder,
     Clicker,
     Flow,
+    Scribe,
 }
 
 struct SuiteApp {
@@ -31,7 +40,9 @@ struct SuiteApp {
     recorder: RecorderApp,
     clicker: ClickerApp,
     flow: FlowEditor,
+    scribe: ScribeApp,
     bridge: AgentBridge,
+    hotkeys: HotkeyBus,
 }
 
 impl SuiteApp {
@@ -47,7 +58,9 @@ impl SuiteApp {
             recorder,
             clicker,
             flow: FlowEditor::new(),
+            scribe: ScribeApp::new(),
             bridge: AgentBridge::new(),
+            hotkeys: HotkeyBus::spawn(),
         }
     }
 
@@ -67,6 +80,11 @@ impl SuiteApp {
             "wait" => Some(NodeKind::Wait),
             "pause" => Some(NodeKind::Pause),
             "manual" => Some(NodeKind::Manual),
+            "loop" | "loop_start" => Some(NodeKind::LoopStart),
+            "loop_end" | "endloop" => Some(NodeKind::LoopEnd),
+            "if_vision" | "ifvision" => Some(NodeKind::IfVision),
+            "loop_while" | "while_match" => Some(NodeKind::LoopWhile),
+            "type" | "type_text" | "keys" | "keyboard" => Some(NodeKind::TypeText),
             _ => None,
         }
     }
@@ -93,11 +111,24 @@ impl SuiteApp {
             "status" => make_ok(
                 "ok".into(),
                 Some(json!({
-                    "tab": match self.tab { Tab::Recorder => "recorder", Tab::Clicker => "clicker", Tab::Flow => "flow" },
+                    "tab": match self.tab {
+                        Tab::Recorder => "recorder",
+                        Tab::Clicker => "clicker",
+                        Tab::Flow => "flow",
+                        Tab::Scribe => "scribe",
+                    },
                     "recorder_status": self.recorder.agent_status(),
                     "recorder_elements": self.recorder.agent_element_count(),
                     "clicker_status": self.clicker.agent_status(),
+                    "clicker_threshold": self.clicker.match_threshold(),
+                    "clicker_pure_vision": self.clicker.pure_vision(),
+                    "clicker_retries": self.clicker.retries(),
+                    "clicker_retry_ms": self.clicker.retry_ms(),
+                    "clicker_on_fail": self.clicker.on_fail().as_str(),
+                    "clicker_save_match_debug": self.clicker.save_match_debug(),
+                    "recorder_hide_wait_ms": self.recorder.hide_wait_ms(),
                     "flow_status": self.flow.agent_status(),
+                    "scribe_recording": self.scribe.is_recording(),
                     "command_file": self.bridge.command_path(),
                 })),
             ),
@@ -109,9 +140,63 @@ impl SuiteApp {
                     "recorder" => Tab::Recorder,
                     "clicker" => Tab::Clicker,
                     "flow" => Tab::Flow,
-                    _ => return make_err("tab must be recorder|clicker|flow".into()),
+                    "scribe" | "docs" | "document" => Tab::Scribe,
+                    _ => return make_err("tab must be recorder|clicker|flow|scribe".into()),
                 };
                 make_ok(format!("switched to {}", tab), None)
+            }
+            "ai_get_config" => {
+                let cfg = scribe_ai::AiConfig::load();
+                make_ok("ai config".into(), Some(cfg.public_view()))
+            }
+            "ai_set_config" => {
+                let mut cfg = scribe_ai::AiConfig::load();
+                cfg.apply_patch(&args);
+                match cfg.save() {
+                    Ok(()) => {
+                        // Keep scribe UI in sync if it holds a copy.
+                        self.scribe.reload_ai_config();
+                        make_ok("ai config saved".into(), Some(cfg.public_view()))
+                    }
+                    Err(e) => make_err(e),
+                }
+            }
+            "scribe_start" => match self.scribe.agent_start(ctx) {
+                Ok(()) => {
+                    self.tab = Tab::Scribe;
+                    make_ok("scribe recording started".into(), None)
+                }
+                Err(e) => make_err(e),
+            },
+            "scribe_stop" => match self.scribe.agent_stop(ctx) {
+                Ok(n) => {
+                    self.tab = Tab::Scribe;
+                    make_ok(
+                        "scribe recording stopped".into(),
+                        Some(json!({ "steps": n, "session": self.scribe.agent_session_id() })),
+                    )
+                }
+                Err(e) => make_err(e),
+            },
+            "scribe_export_html" => {
+                let Some(path) = Self::value_str(args, "path") else {
+                    return make_err("missing args.path".into());
+                };
+                match self.scribe.agent_export_html(path) {
+                    Ok(()) => make_ok("html exported".into(), Some(json!({ "path": path }))),
+                    Err(e) => make_err(e),
+                }
+            }
+            "scribe_to_flow" => {
+                self.scribe.build_flow_draft();
+                if let Some(steps) = self.scribe.take_pending_flow() {
+                    self.flow.agent_build_from_steps(&steps);
+                    self.flow.agent_auto_layout();
+                    self.tab = Tab::Flow;
+                    make_ok("flow draft built".into(), Some(json!({ "nodes": steps.len() + 2 })))
+                } else {
+                    make_err("no session or empty steps".into())
+                }
             }
             "recorder_refresh" => {
                 self.recorder.agent_refresh_elements();
@@ -137,6 +222,68 @@ impl SuiteApp {
                 };
                 self.clicker.agent_set_element_folder(folder.to_string());
                 make_ok("element folder updated".into(), None)
+            }
+            "clicker_set_threshold" => {
+                let Some(th) = args.get("threshold").and_then(|v| v.as_f64()) else {
+                    return make_err("missing args.threshold".into());
+                };
+                self.clicker.agent_set_match_threshold(th as f32);
+                make_ok("threshold set".into(), Some(json!({ "threshold": th })))
+            }
+            "clicker_set_pure_vision" => {
+                let enabled = args
+                    .get("enabled")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true);
+                self.clicker.agent_set_pure_vision(enabled);
+                make_ok(
+                    "pure vision updated".into(),
+                    Some(json!({ "pure_vision": enabled })),
+                )
+            }
+            "clicker_set_retries" => {
+                let Some(n) = Self::value_u64(args, "retries") else {
+                    return make_err("missing args.retries".into());
+                };
+                self.clicker.agent_set_retries(n as u32);
+                make_ok("retries set".into(), Some(json!({ "retries": n })))
+            }
+            "clicker_set_retry_ms" => {
+                let Some(ms) = Self::value_u64(args, "ms") else {
+                    return make_err("missing args.ms".into());
+                };
+                self.clicker.agent_set_retry_ms(ms);
+                make_ok("retry_ms set".into(), Some(json!({ "retry_ms": ms })))
+            }
+            "clicker_set_on_fail" => {
+                let Some(action) = Self::value_str(args, "action") else {
+                    return make_err("missing args.action (skip|abort)".into());
+                };
+                match self.clicker.agent_set_on_fail(action) {
+                    Ok(()) => make_ok("on_fail set".into(), Some(json!({ "on_fail": action }))),
+                    Err(e) => make_err(e),
+                }
+            }
+            "clicker_set_save_match_debug" => {
+                let enabled = args
+                    .get("enabled")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true);
+                self.clicker.agent_set_save_match_debug(enabled);
+                make_ok(
+                    "save_match_debug updated".into(),
+                    Some(json!({ "save_match_debug": enabled })),
+                )
+            }
+            "recorder_set_hide_wait_ms" => {
+                let Some(ms) = Self::value_u64(args, "ms") else {
+                    return make_err("missing args.ms".into());
+                };
+                self.recorder.set_hide_wait_ms(ms);
+                make_ok(
+                    "hide_wait_ms set".into(),
+                    Some(json!({ "hide_wait_ms": self.recorder.hide_wait_ms() })),
+                )
             }
             "clicker_load_workflow" => {
                 let Some(path) = Self::value_str(args, "path") else {
@@ -164,7 +311,9 @@ impl SuiteApp {
                     return make_err("missing args.kind".into());
                 };
                 let Some(kind) = Self::parse_node_kind(kind_s) else {
-                    return make_err("kind must be start|end|click|wait|pause|manual".into());
+                    return make_err(
+                        "kind must be start|end|click|wait|type|pause|manual|loop|loop_end|if_vision|loop_while".into(),
+                    );
                 };
                 let id_num = self.flow.agent_add_flow_node(kind);
                 make_ok("node added".into(), Some(json!({ "id": id_num })))
@@ -176,7 +325,12 @@ impl SuiteApp {
                 let Some(to) = Self::value_u64(args, "to") else {
                     return make_err("missing args.to".into());
                 };
-                self.flow.agent_connect_nodes(from as u32, to as u32);
+                if let Some(branch) = Self::value_str(args, "branch") {
+                    self.flow
+                        .agent_connect_branch(from as u32, to as u32, branch);
+                } else {
+                    self.flow.agent_connect_nodes(from as u32, to as u32);
+                }
                 make_ok("nodes connected".into(), None)
             }
             "flow_compile" => match self.flow.agent_compile_steps() {
@@ -233,7 +387,49 @@ impl SuiteApp {
                     return make_err("missing args.path".into());
                 };
                 match self.flow.agent_load_flow(path) {
-                    Ok(()) => make_ok("flow loaded".into(), None),
+                    Ok(()) => {
+                        self.tab = Tab::Flow;
+                        make_ok("flow loaded".into(), None)
+                    }
+                    Err(e) => make_err(e),
+                }
+            }
+            "flow_load_example" => {
+                let name = Self::value_str(args, "name").unwrap_or("vision-click-10");
+                let result = match name {
+                    "vision-click-10" | "vision_click_10" | "default" => {
+                        self.flow.load_example_vision_click_10()
+                    }
+                    other => Err(format!("unknown example: {other} (supported: vision-click-10)")),
+                };
+                match result {
+                    Ok(()) => {
+                        self.tab = Tab::Flow;
+                        make_ok(format!("example loaded: {name}"), None)
+                    }
+                    Err(e) => make_err(e),
+                }
+            }
+            "flow_ai_generate" => {
+                let Some(prompt) = Self::value_str(args, "prompt") else {
+                    return make_err("missing args.prompt".into());
+                };
+                let replace = args
+                    .get("replace")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true);
+                match self.flow.agent_ai_generate(prompt, replace) {
+                    Ok((title, nodes, edges)) => {
+                        self.tab = Tab::Flow;
+                        make_ok(
+                            "flow generated".into(),
+                            Some(json!({
+                                "title": title,
+                                "nodes": nodes,
+                                "edges": edges,
+                            })),
+                        )
+                    }
                     Err(e) => make_err(e),
                 }
             }
@@ -259,11 +455,41 @@ impl SuiteApp {
                             NodeKind::Wait => "wait",
                             NodeKind::Pause => "pause",
                             NodeKind::Manual => "manual",
+                            NodeKind::LoopStart => "loop",
+                            NodeKind::LoopEnd => "loop_end",
+                            NodeKind::IfVision => "if_vision",
+                            NodeKind::LoopWhile => "loop_while",
+                            NodeKind::TypeText => "type",
                         };
                         json!({ "id": id_num, "kind": kind_s })
                     })
                     .collect();
                 make_ok("ok".into(), Some(json!({ "nodes": nodes })))
+            }
+            "flow_auto_layout" => {
+                self.flow.agent_auto_layout();
+                make_ok("flow auto-laid out".into(), None)
+            }
+            "flow_duplicate" => {
+                let n = self.flow.agent_duplicate_selection();
+                make_ok(
+                    "selection duplicated".into(),
+                    Some(json!({ "pasted": n })),
+                )
+            }
+            "flow_undo" => {
+                if self.flow.agent_undo() {
+                    make_ok("undone".into(), None)
+                } else {
+                    make_err("nothing to undo".into())
+                }
+            }
+            "flow_redo" => {
+                if self.flow.agent_redo() {
+                    make_ok("redone".into(), None)
+                } else {
+                    make_err("nothing to redo".into())
+                }
             }
             _ => make_err(format!("unknown action: {}", action)),
         }
@@ -277,27 +503,149 @@ impl eframe::App for SuiteApp {
             let _ = self.bridge.write_response(&resp);
         }
 
+        // Drain global hotkeys (Ctrl+Alt+F9 start / F10 stop / F8 scribe)
+        while let Some(ev) = self.hotkeys.try_recv() {
+            match ev {
+                HotkeyEvent::Stop => {
+                    self.clicker.agent_stop(ctx);
+                    if self.scribe.is_recording() {
+                        self.scribe.stop_recording(ctx);
+                        self.tab = Tab::Scribe;
+                    }
+                }
+                HotkeyEvent::Start => {
+                    if !self.clicker.is_busy() {
+                        match self.flow.agent_compile_steps() {
+                            Ok(steps) => {
+                                self.clicker.agent_set_workflow_steps(steps);
+                                if let Err(e) = self.clicker.agent_start_workflow(ctx) {
+                                    self.flow.set_run_highlight(None);
+                                    let _ = e;
+                                } else {
+                                    self.tab = Tab::Flow;
+                                }
+                            }
+                            Err(_) => {}
+                        }
+                    }
+                }
+                HotkeyEvent::ScribeToggle => {
+                    self.tab = Tab::Scribe;
+                    self.scribe.toggle_recording(ctx);
+                }
+            }
+        }
+
+        if let Some(steps) = self.scribe.take_pending_flow() {
+            self.flow.agent_build_from_steps(&steps);
+            self.flow.agent_auto_layout();
+            self.tab = Tab::Flow;
+        }
+
+        self.recorder.tick_hide_then_capture(ctx);
+
+        self.flow
+            .set_element_catalog(self.recorder.element_catalog());
+        self.flow
+            .set_run_highlight(self.clicker.current_workflow_node());
+        if self.clicker.is_busy() || self.clicker.should_show_run_hud() {
+            ctx.request_repaint();
+        }
+
+        // Top-of-screen run HUD (main window stays minimized)
+        if self.clicker.should_show_run_hud() {
+            self.clicker.paint_run_hud(ctx);
+        }
+
+        if let Some(name) = self.flow.pending_screenshot.take() {
+            self.recorder.start_named_capture_after_hide(ctx, name);
+            self.tab = Tab::Recorder;
+        }
+
         let capturing = self.recorder.is_capturing();
 
         if !capturing {
-            egui::TopBottomPanel::top("tab_bar").show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.selectable_value(&mut self.tab, Tab::Recorder, "录制");
-                    ui.selectable_value(&mut self.tab, Tab::Clicker, "点击");
-                    ui.selectable_value(&mut self.tab, Tab::Flow, "流程图");
+            egui::TopBottomPanel::top("tab_bar")
+                .exact_height(56.0)
+                .frame(
+                    egui::Frame::none()
+                        .fill(Color32::from_rgba_unmultiplied(255, 255, 255, 248))
+                        .inner_margin(egui::Margin::symmetric(16.0, 0.0)),
+                )
+                .show(ctx, |ui| {
+                    let full_w = ui.available_width();
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(full_w, 56.0),
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| {
+                            theme::brand_title(ui);
+                            ui.add_space(18.0);
+
+                            let sel = match self.tab {
+                                Tab::Recorder => 0,
+                                Tab::Clicker => 1,
+                                Tab::Flow => 2,
+                                Tab::Scribe => 3,
+                            };
+                            if let Some(i) = theme::segmented_control(
+                                ui,
+                                &["录制", "点击", "流程图", "文档"],
+                                sel,
+                            ) {
+                                self.tab = match i {
+                                    0 => Tab::Recorder,
+                                    1 => Tab::Clicker,
+                                    2 => Tab::Flow,
+                                    _ => Tab::Scribe,
+                                };
+                            }
+
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    if self.clicker.is_busy() {
+                                        theme::status_pill(
+                                            ui,
+                                            "运行中  Ctrl+Alt+F10",
+                                            theme::StatusTone::Run,
+                                        );
+                                    } else if self.scribe.is_recording() {
+                                        theme::status_pill(
+                                            ui,
+                                            "文档录制中  Ctrl+Alt+F10 停止",
+                                            theme::StatusTone::Danger,
+                                        );
+                                    } else {
+                                        ui.label(
+                                            egui::RichText::new("Ctrl+Alt+F9 启动")
+                                                .size(12.0)
+                                                .color(theme::colors::MUTED),
+                                        );
+                                    }
+                                },
+                            );
+                        },
+                    );
+                    let r = ui.max_rect();
+                    ui.painter().hline(
+                        r.x_range(),
+                        r.bottom() - 0.5,
+                        egui::Stroke::new(1.0, theme::colors::PANEL_EDGE),
+                    );
                 });
-            });
         }
 
         if let Some(steps) = self.flow.pending_run.take() {
             self.clicker.run_workflow_steps(ctx, steps);
-            self.tab = Tab::Clicker;
+            self.tab = Tab::Flow;
         }
 
         if capturing || self.tab == Tab::Recorder {
             self.recorder.ui(ctx);
         } else if self.tab == Tab::Clicker {
             self.clicker.ui(ctx);
+        } else if self.tab == Tab::Scribe {
+            self.scribe.ui(ctx);
         } else {
             self.flow.ui(ctx);
         }
@@ -306,9 +654,11 @@ impl eframe::App for SuiteApp {
 
 fn main() -> eframe::Result {
     setup_panic_hook();
+    screen::enable_dpi_awareness();
     let opts = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([700.0, 550.0])
+            .with_inner_size([960.0, 640.0])
+            .with_min_inner_size([780.0, 520.0])
             .with_title("Mouse Suite"),
         ..Default::default()
     };

@@ -35,7 +35,9 @@ $payload | ConvertTo-Json -Depth 20 | Set-Content -Encoding UTF8 -Path $cmdPath
 Write-Host "sent: $cmdPath"
 Write-Host "id=$Id action=$Action"
 
-$deadline = (Get-Date).AddSeconds(8)
+# AI actions (flow_ai_generate / scribe AI) often need >60s
+$timeoutSec = if ($Action -match 'ai_|flow_ai') { 180 } else { 8 }
+$deadline = (Get-Date).AddSeconds($timeoutSec)
 while ((Get-Date) -lt $deadline) {
     if (Test-Path $respPath) {
         $raw = Get-Content -Raw -Path $respPath

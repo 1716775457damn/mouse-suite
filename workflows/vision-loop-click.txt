@@ -1,0 +1,5 @@
+# Mouse Suite workflow
+loop: 10
+if_vision: element | threshold=0.85 | retries=0 | retry_ms=300 | then=2 | else=1
+click: element | threshold=0.85 | pure_vision=false | retries=0 | retry_ms=500 | on_fail=skip
+loop_end:

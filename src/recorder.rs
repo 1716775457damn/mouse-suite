@@ -11,7 +11,6 @@ use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
-use xcap::Monitor;
 
 fn log_error(msg: &str) {
     let log_path = data_dir().join("error.log");
@@ -60,13 +59,37 @@ fn get_next_state_suffix(current: &str) -> String {
 }
 
 fn get_resolution() -> (u32, u32) {
-    Monitor::all()
+    let (cx, cy) = crate::screen::cursor_pos();
+    crate::screen::monitor_at(cx, cy)
         .ok()
-        .and_then(|m| {
-            m.first()
-                .map(|mon| (mon.width().unwrap_or(1920), mon.height().unwrap_or(1080)))
-        })
+        .map(|mon| (mon.width().unwrap_or(1920), mon.height().unwrap_or(1080)))
         .unwrap_or((1920, 1080))
+}
+
+fn load_element_thumb(
+    ctx: &egui::Context,
+    path: &str,
+    id: i32,
+) -> Option<egui::TextureHandle> {
+    let img = image::open(path).ok()?.into_rgba8();
+    let (w, h) = (img.width(), img.height());
+    let max_side = 160u32;
+    let m = w.max(h).max(1);
+    let rgba = if m > max_side {
+        let s = max_side as f32 / m as f32;
+        let nw = ((w as f32) * s).round().max(1.0) as u32;
+        let nh = ((h as f32) * s).round().max(1.0) as u32;
+        image::imageops::resize(&img, nw, nh, image::imageops::FilterType::Triangle)
+    } else {
+        img
+    };
+    let size = [rgba.width() as usize, rgba.height() as usize];
+    let color = egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw());
+    Some(ctx.load_texture(
+        format!("elem_thumb_{id}"),
+        color,
+        egui::TextureOptions::LINEAR,
+    ))
 }
 
 fn init_db(path: &str) -> Connection {
@@ -104,9 +127,11 @@ struct ElementRec {
     cx: i32,
     cy: i32,
     states: Vec<(String, bool)>,
+    /// Absolute path to primary preview image.
+    preview_path: Option<String>,
 }
 
-fn load_elements(conn: &Connection) -> Vec<ElementRec> {
+fn load_elements(conn: &Connection, image_dir: &str) -> Vec<ElementRec> {
     let mut res = Vec::new();
     if let Ok(mut st) = conn.prepare("SELECT id,name,center_x,center_y FROM elements ORDER BY id") {
         if let Ok(rows) = st.query_map([], |r| {
@@ -131,12 +156,30 @@ fn load_elements(conn: &Connection) -> Vec<ElementRec> {
                         }
                     }
                 }
+                let preview_path = conn
+                    .query_row(
+                        "SELECT image_path FROM element_states WHERE element_id=?1 AND is_primary=1 LIMIT 1",
+                        params![id],
+                        |r| r.get::<_, String>(0),
+                    )
+                    .ok()
+                    .map(|fname| {
+                        let p = std::path::Path::new(image_dir).join(&fname);
+                        if p.exists() {
+                            p.to_string_lossy().to_string()
+                        } else if std::path::Path::new(&fname).exists() {
+                            fname
+                        } else {
+                            p.to_string_lossy().to_string()
+                        }
+                    });
                 res.push(ElementRec {
                     id,
                     name,
                     cx,
                     cy,
                     states,
+                    preview_path,
                 });
             }
         }
@@ -236,6 +279,59 @@ fn create_elem(
     Ok(id)
 }
 
+/// Create or replace primary template for a named element.
+fn upsert_elem(
+    conn: &Connection,
+    name: &str,
+    state: &str,
+    x1: i32,
+    y1: i32,
+    x2: i32,
+    y2: i32,
+    img: &str,
+    sw: u32,
+    sh: u32,
+) -> Result<i32, String> {
+    let existing: Option<i32> = conn
+        .query_row(
+            "SELECT id FROM elements WHERE name=?1 LIMIT 1",
+            params![name],
+            |r| r.get(0),
+        )
+        .ok();
+    if let Some(id) = existing {
+        let cx = x1.min(x2) + (x1 - x2).abs() / 2;
+        let cy = y1.min(y2) + (y1 - y2).abs() / 2;
+        let ts = Local::now().format("%Y%m%d_%H%M%S").to_string();
+        let bx = x1.min(x2);
+        let by = y1.min(y2);
+        let bw = (x1 - x2).abs() as u32;
+        let bh = (y1 - y2).abs() as u32;
+        conn.execute(
+            "UPDATE elements SET center_x=?1,center_y=?2,bbox_x=?3,bbox_y=?4,bbox_width=?5,bbox_height=?6,screen_width=?7,screen_height=?8 WHERE id=?9",
+            params![cx, cy, bx, by, bw, bh, sw, sh, id],
+        )
+        .map_err(|e| e.to_string())?;
+        let fname = std::path::Path::new(img)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or(img)
+            .to_string();
+        let _ = conn.execute(
+            "UPDATE element_states SET is_primary=0 WHERE element_id=?1",
+            params![id],
+        );
+        conn.execute(
+            "INSERT INTO element_states(element_id,state_name,image_path,is_primary,created_at) VALUES(?1,?2,?3,1,?4)",
+            params![id, state, fname, ts],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(id)
+    } else {
+        create_elem(conn, name, state, x1, y1, x2, y2, img, sw, sh)
+    }
+}
+
 enum AppMode {
     Normal,
     Capturing,
@@ -299,6 +395,8 @@ pub struct RecorderApp {
     conn: Connection,
     config: Config,
     elements: Vec<ElementRec>,
+    /// Thumbnail textures aligned with `elements` indices.
+    previews: Vec<Option<egui::TextureHandle>>,
     last_id: Option<i32>,
     last_element_name: Option<String>,
     last_state_name: Option<String>,
@@ -316,8 +414,16 @@ pub struct RecorderApp {
     mouse_pos: Option<(i32, i32)>,
     capture_started_at: Option<std::time::Instant>,
     forced_state_name: Option<String>,
+    /// When set, skip name dialog and upsert this element after crop.
+    forced_element_name: Option<String>,
+    /// Hide window first; after delay, grab desktop then show overlay.
+    hide_started: Option<std::time::Instant>,
+    pending_is_add_state: bool,
     image_dir: String,
     pre_capture: Option<(egui::TextureHandle, image::RgbaImage)>,
+    /// Top-left of the captured monitor in screen pixels (multi-mon crop/overlay).
+    capture_origin: (i32, i32),
+    filter: String,
 }
 
 impl RecorderApp {
@@ -327,7 +433,7 @@ impl RecorderApp {
         let _ = fs::create_dir_all(&image_dir);
         let conn = init_db(&db_path);
         let (sw, sh) = get_resolution();
-        let elems = load_elements(&conn);
+        let elems = load_elements(&conn, &image_dir);
         let last = elems.last().map(|e| e.id);
         let flag = Arc::new(AtomicBool::new(false));
         let (tx, rx) = mpsc::channel();
@@ -337,6 +443,7 @@ impl RecorderApp {
             config,
             image_dir,
             elements: elems,
+            previews: Vec::new(),
             last_id: last,
             last_element_name: None,
             last_state_name: None,
@@ -354,12 +461,17 @@ impl RecorderApp {
             mouse_pos: None,
             capture_started_at: None,
             forced_state_name: None,
+            forced_element_name: None,
+            hide_started: None,
+            pending_is_add_state: false,
             pre_capture: None,
+            capture_origin: (0, 0),
+            filter: String::new(),
         }
     }
 
     pub fn is_capturing(&self) -> bool {
-        matches!(self.mode, AppMode::Capturing)
+        matches!(self.mode, AppMode::Capturing) || self.hide_started.is_some()
     }
 
     /// Agent entrypoint: current human-readable recorder status.
@@ -372,6 +484,22 @@ impl RecorderApp {
         self.elements.len()
     }
 
+    /// Names of recorded elements (for flow pickers).
+    pub fn element_names(&self) -> Vec<String> {
+        self.elements.iter().map(|e| e.name.clone()).collect()
+    }
+
+    /// Catalog with preview paths for flow visual picker.
+    pub fn element_catalog(&self) -> Vec<crate::common::ElementCatalogItem> {
+        self.elements
+            .iter()
+            .map(|e| crate::common::ElementCatalogItem {
+                name: e.name.clone(),
+                preview_path: e.preview_path.clone().unwrap_or_default(),
+            })
+            .collect()
+    }
+
     /// Agent entrypoint: refresh local list from DB.
     pub fn agent_refresh(&mut self) {
         self.refresh();
@@ -381,12 +509,21 @@ impl RecorderApp {
     /// Agent entrypoint: start a new-element capture flow.
     pub fn agent_start_new_capture(&mut self, ctx: &egui::Context) {
         self.forced_state_name = None;
+        self.forced_element_name = None;
+        self.begin_capture(ctx, false);
+    }
+
+    /// Start capture bound to a fixed element name (flow click node screenshot).
+    pub fn start_named_capture_after_hide(&mut self, ctx: &egui::Context, element_name: String) {
+        self.forced_state_name = None;
+        self.forced_element_name = Some(element_name);
         self.begin_capture(ctx, false);
     }
 
     /// Agent entrypoint: start add-state capture for current element.
     pub fn agent_start_add_state_capture(&mut self, ctx: &egui::Context, forced_state: Option<String>) {
         self.forced_state_name = forced_state;
+        self.forced_element_name = None;
         self.begin_capture(ctx, true);
     }
 
@@ -398,42 +535,146 @@ impl RecorderApp {
     }
 
     fn refresh(&mut self) {
-        self.elements = load_elements(&self.conn);
+        self.elements = load_elements(&self.conn, &self.image_dir);
         self.last_id = self.elements.last().map(|e| e.id);
+        self.previews.clear();
     }
 
+    fn ensure_previews(&mut self, ctx: &egui::Context) {
+        if self.previews.len() == self.elements.len() {
+            return;
+        }
+        self.previews.clear();
+        for e in &self.elements {
+            let tex = e
+                .preview_path
+                .as_ref()
+                .and_then(|p| load_element_thumb(ctx, p, e.id));
+            self.previews.push(tex);
+        }
+    }
+
+    /// Hide UI first; actual desktop grab happens after window is fully gone.
     fn begin_capture(&mut self, ctx: &egui::Context, is_add_state: bool) {
+        self.pending_is_add_state = is_add_state;
+        self.drag_start = None;
+        self.drag_current = None;
+        self.mouse_pos = None;
+        self.pre_capture = None;
+        self.capture_flag.store(false, Ordering::Relaxed);
+        let wait_ms = self.config.hide_wait_ms();
+        self.hide_started = Some(std::time::Instant::now());
+        self.status = format!("正在隐藏窗口（{}ms），完全消失后再截屏…", wait_ms);
+        log_error(&format!("begin_capture: hide wait {}ms", wait_ms));
+
+        // Minimize only — do NOT set Visible(false).
+        // Visible(false) can stall the egui event loop so tick_hide_then_capture never runs.
+        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+        // Park the window off-screen so it doesn't flash into the desktop grab.
+        ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(
+            -20000.0, -20000.0,
+        )));
+        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(1.0, 1.0)));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(false));
+
+        // Wake the UI after the hide delay even if the window is minimized.
+        let ctx_wake = ctx.clone();
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(wait_ms));
+            ctx_wake.request_repaint();
+        });
+        ctx.request_repaint_after(Duration::from_millis(wait_ms.min(200).max(50)));
+    }
+
+    /// Call every frame: after hide delay, capture desktop then open overlay.
+    pub fn tick_hide_then_capture(&mut self, ctx: &egui::Context) {
+        let Some(started) = self.hide_started else {
+            return;
+        };
+        let wait = Duration::from_millis(self.config.hide_wait_ms());
+        let elapsed = started.elapsed();
+        if elapsed < wait {
+            // Keep requesting repaints while waiting (minimized windows may throttle).
+            let remain = wait.saturating_sub(elapsed);
+            ctx.request_repaint_after(remain.min(Duration::from_millis(100)));
+            return;
+        }
+        self.hide_started = None;
+        log_error("tick_hide_then_capture: starting overlay grab");
+        self.start_overlay_after_grab(ctx, self.pending_is_add_state);
+    }
+
+    pub fn hide_wait_ms(&self) -> u64 {
+        self.config.hide_wait_ms()
+    }
+
+    pub fn set_hide_wait_ms(&mut self, ms: u64) {
+        self.config.hide_wait_ms = ms.clamp(500, 3000);
+        self.config.save();
+    }
+
+    fn start_overlay_after_grab(&mut self, ctx: &egui::Context, is_add_state: bool) {
         self.capture_flag.store(true, Ordering::Relaxed);
         self.drag_start = None;
         self.drag_current = None;
         self.capture_started_at = Some(std::time::Instant::now());
         self.is_add_state_mode = is_add_state;
         self.status = "Capturing desktop...".into();
+        self.scale = ctx.pixels_per_point();
 
         self.pre_capture = None;
-        if let Ok(monitors) = Monitor::all() {
-            if let Some(mon) = monitors.first() {
-                if let Ok(img) = mon.capture_image() {
-                    let size = [img.width() as usize, img.height() as usize];
-                    let pixels: Vec<egui::Color32> = img
-                        .pixels()
-                        .map(|p| egui::Color32::from_rgba_premultiplied(p[0], p[1], p[2], 255))
-                        .collect();
-                    let color_img = egui::ColorImage { size, pixels };
-                    let tex = ctx.load_texture("desktop-bg", color_img, egui::TextureOptions::LINEAR);
-                    self.pre_capture = Some((tex, img));
-                    self.status = "Click and drag on screen to select region...".into();
-                }
+        match crate::screen::capture_under_cursor() {
+            Ok(cap) => {
+                self.capture_origin = (cap.x, cap.y);
+                self.sw = cap.width;
+                self.sh = cap.height;
+                let size = [cap.image.width() as usize, cap.image.height() as usize];
+                let pixels: Vec<egui::Color32> = cap
+                    .image
+                    .pixels()
+                    .map(|p| egui::Color32::from_rgba_premultiplied(p[0], p[1], p[2], 255))
+                    .collect();
+                let color_img = egui::ColorImage { size, pixels };
+                let tex = ctx.load_texture("desktop-bg", color_img, egui::TextureOptions::LINEAR);
+                self.pre_capture = Some((tex, cap.image));
+                self.status = format!(
+                    "在当前屏框选（原点 {},{} · {}×{}）…",
+                    cap.x, cap.y, cap.width, cap.height
+                );
+                log_error(&format!(
+                    "start_overlay_after_grab: mon ({},{}) {}x{}",
+                    cap.x, cap.y, cap.width, cap.height
+                ));
+            }
+            Err(e) => {
+                log_error(&format!("start_overlay_after_grab: {e}"));
             }
         }
         if self.pre_capture.is_none() {
             self.status = "Failed to capture desktop".into();
+            log_error("start_overlay_after_grab: capture_image failed");
             self.capture_flag.store(false, Ordering::Relaxed);
+            self.forced_element_name = None;
+            self.mode = AppMode::Normal;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(true));
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(700.0, 550.0)));
+            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(100.0, 100.0)));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             return;
         }
 
+        // Show fullscreen selection overlay only after grab succeeded.
+        log_error("start_overlay_after_grab: overlay ready");
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
         self.mode = AppMode::Capturing;
-        ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(0.0, 0.0)));
+        let (ox, oy) = self.capture_origin;
+        ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(
+            ox as f32 / self.scale,
+            oy as f32 / self.scale,
+        )));
         ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
             self.sw as f32 / self.scale,
             self.sh as f32 / self.scale,
@@ -442,6 +683,8 @@ impl RecorderApp {
         ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(
             egui::WindowLevel::AlwaysOnTop,
         ));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        ctx.request_repaint();
     }
 
     fn end_capture(&mut self, ctx: &egui::Context) {
@@ -507,10 +750,21 @@ impl RecorderApp {
 
                             let result = match (saved_start, pre_img) {
                                 (Some((sx, sy)), Some(full)) => {
-                                    let px = sx.min(x as i32);
-                                    let py = sy.min(y as i32);
-                                    let pw = (sx - x as i32).abs() as u32;
-                                    let ph = (sy - y as i32).abs() as u32;
+                                    let (ox, oy) = self.capture_origin;
+                                    // Absolute screen coords → image-local pixels
+                                    let lx0 = sx.min(x as i32) - ox;
+                                    let ly0 = sy.min(y as i32) - oy;
+                                    let lx1 = sx.max(x as i32) - ox;
+                                    let ly1 = sy.max(y as i32) - oy;
+                                    let px = lx0.max(0);
+                                    let py = ly0.max(0);
+                                    let pw = (lx1 - lx0).max(0) as u32;
+                                    let ph = (ly1 - ly0).max(0) as u32;
+                                    // Absolute bbox for clicker / element DB
+                                    let abs_x1 = sx.min(x as i32);
+                                    let abs_y1 = sy.min(y as i32);
+                                    let abs_x2 = sx.max(x as i32);
+                                    let abs_y2 = sy.max(y as i32);
                                     if pw == 0 || ph == 0 {
                                         Err("Zero region".into())
                                     } else {
@@ -539,11 +793,7 @@ impl RecorderApp {
                                             }
                                             match cropped.save(&path) {
                                                 Ok(_) => Ok((
-                                                    px as i32,
-                                                    py as i32,
-                                                    (px + pw as i32) as i32,
-                                                    (py + ph as i32) as i32,
-                                                    path_s,
+                                                    abs_x1, abs_y1, abs_x2, abs_y2, path_s,
                                                 )),
                                                 Err(e) => Err(format!("Save failed: {}", e)),
                                             }
@@ -607,6 +857,41 @@ impl RecorderApp {
                                             self.status = "No element selected".into();
                                         }
                                         self.mode = AppMode::Normal;
+                                    } else if let Some(name) = self.forced_element_name.take() {
+                                        let state_name = "-n".to_string();
+                                        let new_path = std::path::Path::new(&self.image_dir)
+                                            .join(format!("{}_{}.png", name, state_name))
+                                            .to_string_lossy()
+                                            .to_string();
+                                        let img_path =
+                                            if std::fs::rename(&img_path, &new_path).is_ok() {
+                                                new_path
+                                            } else {
+                                                img_path
+                                            };
+                                        match upsert_elem(
+                                            &self.conn,
+                                            &name,
+                                            &state_name,
+                                            x1,
+                                            y1,
+                                            x2,
+                                            y2,
+                                            &img_path,
+                                            self.sw,
+                                            self.sh,
+                                        ) {
+                                            Ok(id) => {
+                                                self.last_id = Some(id);
+                                                self.last_element_name = Some(name.clone());
+                                                self.last_state_name = Some(state_name);
+                                                self.status =
+                                                    format!("已绑定模板「{}」(#{})", name, id);
+                                                self.refresh();
+                                            }
+                                            Err(e) => self.status = format!("Error: {}", e),
+                                        }
+                                        self.mode = AppMode::Normal;
                                     } else {
                                         self.mode = AppMode::InputName(x1, y1, x2, y2, img_path);
                                         self.input.clear();
@@ -628,6 +913,15 @@ impl RecorderApp {
                         let painter = ui.painter();
                         let sw = self.sw as f32 / self.scale;
                         let sh = self.sh as f32 / self.scale;
+                        let (ox, oy) = self.capture_origin;
+                        let scale = self.scale.max(0.01);
+                        // Absolute screen pixels → overlay-local egui points
+                        let to_local = |sx: i32, sy: i32| -> (f32, f32) {
+                            (
+                                (sx - ox) as f32 / scale,
+                                (sy - oy) as f32 / scale,
+                            )
+                        };
 
                         if let Some((tex, _)) = &self.pre_capture {
                             let bg_rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(sw, sh));
@@ -645,10 +939,12 @@ impl RecorderApp {
                         if let (Some((sx, sy)), Some((cx, cy))) =
                             (self.drag_start, self.drag_current)
                         {
-                            let x1 = (sx.min(cx)) as f32;
-                            let y1 = (sy.min(cy)) as f32;
-                            let x2 = (sx.max(cx)) as f32;
-                            let y2 = (sy.max(cy)) as f32;
+                            let (x1a, y1a) = to_local(sx.min(cx), sy.min(cy));
+                            let (x2a, y2a) = to_local(sx.max(cx), sy.max(cy));
+                            let x1 = x1a.clamp(0.0, sw);
+                            let y1 = y1a.clamp(0.0, sh);
+                            let x2 = x2a.clamp(0.0, sw);
+                            let y2 = y2a.clamp(0.0, sh);
 
                             painter.rect_filled(
                                 Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(sw, y1)),
@@ -699,8 +995,8 @@ impl RecorderApp {
                                 );
                             }
 
-                            let w = (x2 - x1) as i32;
-                            let h = (y2 - y1) as i32;
+                            let w = (sx.max(cx) - sx.min(cx)).abs();
+                            let h = (sy.max(cy) - sy.min(cy)).abs();
                             let dims = format!(" {}x{} ", w, h);
                             let lx = if x2 + 4.0 + dims.len() as f32 * 8.5 < sw {
                                 x2 + 4.0
@@ -728,8 +1024,7 @@ impl RecorderApp {
                             );
 
                             if let Some((mx, my)) = self.mouse_pos {
-                                let mx = mx as f32;
-                                let my = my as f32;
+                                let (mx, my) = to_local(mx, my);
                                 painter.line_segment(
                                     [Pos2::new(0.0, my), Pos2::new(sw, my)],
                                     Stroke::new(1.0, cross_color),
@@ -783,82 +1078,251 @@ impl RecorderApp {
             }
             _ => {
                 egui::CentralPanel::default()
-                    .frame(egui::Frame::central_panel(&ctx.style()))
+                    .frame(egui::Frame::none().fill(theme::colors::BG))
                     .show(ctx, |ui| {
-                        ui.add_space(4.0);
+                        theme::paint_atmosphere(ui);
+                        theme::card_frame().show(ui, |ui| {
+                        ui.add_space(2.0);
                         theme::section_header(
                             ui,
-                            "元素录制",
-                            &format!("屏幕 {}×{} · 框选区域保存为模板", self.sw, self.sh),
+                            "元素库",
+                            &format!(
+                                "屏幕 {}×{} · {} 个元素 · 框选区域保存为模板",
+                                self.sw,
+                                self.sh,
+                                self.elements.len()
+                            ),
                         );
 
-                        ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
-                            if self.elements.is_empty() {
-                                ui.colored_label(
-                                    Color32::GRAY,
-                                    "No elements. Click [New Element] to record.",
-                                );
-                            }
-                            for e in &self.elements {
-                                let lab =
-                                    format!("#{} {} ({}, {})", e.id, e.name, e.cx, e.cy);
-                                if Some(e.id) == self.last_id {
-                                    ui.colored_label(Color32::YELLOW, &lab);
-                                } else {
-                                    ui.label(&lab);
-                                }
-                                for (sn, pr) in &e.states {
-                                    let m = if *pr { " [PRIMARY]" } else { "" };
-                                    ui.colored_label(
-                                        Color32::DARK_GRAY,
-                                        format!("  - {}{}", sn, m),
+                        self.ensure_previews(ctx);
+
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                egui::RichText::new("筛选")
+                                    .size(12.0)
+                                    .color(theme::colors::MUTED),
+                            );
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.filter)
+                                    .desired_width(220.0)
+                                    .hint_text("按名称过滤…"),
+                            );
+                        });
+                        ui.add_space(8.0);
+
+                        theme::inset_frame().show(ui, |ui| {
+                            let filter = self.filter.to_lowercase();
+                            let indices: Vec<usize> = self
+                                .elements
+                                .iter()
+                                .enumerate()
+                                .filter(|(_, e)| {
+                                    filter.is_empty()
+                                        || e.name.to_lowercase().contains(&filter)
+                                })
+                                .map(|(i, _)| i)
+                                .collect();
+
+                            ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+                                if indices.is_empty() {
+                                    ui.label(
+                                        egui::RichText::new(if self.elements.is_empty() {
+                                            "暂无元素。点击「新建元素」开始录制模板。"
+                                        } else {
+                                            "没有匹配的元素。"
+                                        })
+                                        .color(theme::colors::MUTED),
                                     );
+                                    return;
                                 }
-                            }
+
+                                let avail = ui.available_width();
+                                let card_w = 132.0_f32;
+                                let gap = 10.0_f32;
+                                let cols =
+                                    ((avail + gap) / (card_w + gap)).floor().max(1.0) as usize;
+
+                                egui::Grid::new("element_gallery")
+                                    .num_columns(cols)
+                                    .spacing([gap, gap])
+                                    .show(ui, |ui| {
+                                        for (n, &i) in indices.iter().enumerate() {
+                                            let selected =
+                                                Some(self.elements[i].id) == self.last_id;
+                                            let name = self.elements[i].name.clone();
+                                            let id = self.elements[i].id;
+                                            let cx = self.elements[i].cx;
+                                            let cy = self.elements[i].cy;
+                                            let n_states = self.elements[i].states.len();
+                                            let tex =
+                                                self.previews.get(i).and_then(|t| t.as_ref());
+
+                                            let resp = theme::panel_frame().show(ui, |ui| {
+                                                ui.set_width(card_w - 8.0);
+                                                ui.set_min_height(148.0);
+
+                                                let thumb = egui::vec2(108.0, 72.0);
+                                                let (rect, _) = ui.allocate_exact_size(
+                                                    thumb,
+                                                    egui::Sense::hover(),
+                                                );
+                                                ui.painter().rect_filled(
+                                                    rect,
+                                                    8.0,
+                                                    theme::colors::INSET,
+                                                );
+                                                if let Some(tex) = tex {
+                                                    let size = tex.size_vec2();
+                                                    let s = (thumb.x / size.x)
+                                                        .min(thumb.y / size.y)
+                                                        .min(1.0);
+                                                    let disp = size * s;
+                                                    let img_rect = egui::Rect::from_center_size(
+                                                        rect.center(),
+                                                        disp,
+                                                    );
+                                                    ui.painter().image(
+                                                        tex.id(),
+                                                        img_rect,
+                                                        egui::Rect::from_min_max(
+                                                            egui::pos2(0.0, 0.0),
+                                                            egui::pos2(1.0, 1.0),
+                                                        ),
+                                                        egui::Color32::WHITE,
+                                                    );
+                                                } else {
+                                                    ui.painter().text(
+                                                        rect.center(),
+                                                        egui::Align2::CENTER_CENTER,
+                                                        "无图",
+                                                        egui::FontId::proportional(12.0),
+                                                        theme::colors::FAINT,
+                                                    );
+                                                }
+
+                                                ui.add_space(6.0);
+                                                ui.label(
+                                                    egui::RichText::new(&name)
+                                                        .size(13.0)
+                                                        .strong()
+                                                        .color(if selected {
+                                                            theme::colors::ACCENT
+                                                        } else {
+                                                            theme::colors::TEXT
+                                                        }),
+                                                );
+                                                ui.label(
+                                                    egui::RichText::new(format!(
+                                                        "#{id} · ({cx},{cy}) · {n_states}态"
+                                                    ))
+                                                    .size(11.0)
+                                                    .color(theme::colors::MUTED),
+                                                );
+                                            });
+
+                                            let click = ui.interact(
+                                                resp.response.rect,
+                                                ui.id().with(("el_card", id)),
+                                                egui::Sense::click(),
+                                            );
+                                            if selected {
+                                                ui.painter().rect_stroke(
+                                                    resp.response.rect,
+                                                    14.0,
+                                                    egui::Stroke::new(2.0, theme::colors::ACCENT),
+                                                );
+                                            } else if click.hovered() {
+                                                ui.painter().rect_stroke(
+                                                    resp.response.rect,
+                                                    14.0,
+                                                    egui::Stroke::new(
+                                                        1.0,
+                                                        theme::colors::PANEL_EDGE,
+                                                    ),
+                                                );
+                                            }
+                                            if click.clicked() {
+                                                self.last_id = Some(id);
+                                                self.last_element_name = Some(name);
+                                                self.status = format!("已选中 #{id}");
+                                            }
+
+                                            if (n + 1) % cols == 0 {
+                                                ui.end_row();
+                                            }
+                                        }
+                                    });
+                            });
                         });
 
+                        ui.add_space(8.0);
                         ui.separator();
-                        ui.colored_label(Color32::GREEN, &self.status);
+                        ui.colored_label(theme::colors::SUCCESS, &self.status);
 
                         match &self.mode {
                             AppMode::Normal => {
-                                ui.horizontal(|ui| {
-                                    if ui.button("New Element  [F5]").clicked()
+                                theme::toolbar_row(ui, |ui| {
+                                    if theme::primary_button(ui, "新建元素  F5").clicked()
                                         || ui.input(|i| i.key_pressed(egui::Key::F5))
                                     {
                                         self.forced_state_name = None;
                                         self.begin_capture(ctx, false);
                                     }
                                     if self.last_id.is_some() {
-                                        if ui.button("Add State  [F6]").clicked()
+                                        if theme::secondary_button(ui, "添加状态  F6").clicked()
                                             || ui.input(|i| i.key_pressed(egui::Key::F6))
                                         {
                                             self.forced_state_name = None;
                                             self.begin_capture(ctx, true);
                                         }
                                     }
-                                    if ui.button("Export CSV").clicked() {
+                                    if theme::secondary_button(ui, "导出 CSV").clicked() {
                                         self.mode = AppMode::InputExport;
                                         self.input.clear();
-                                        self.status = "Enter export filename:".into();
+                                        self.status = "输入导出文件名:".into();
                                     }
-                                    if ui.button("Refresh").clicked() {
+                                    if theme::secondary_button(ui, "刷新").clicked() {
                                         self.refresh();
-                                        self.status = "Refreshed".into();
+                                        self.status = "已刷新".into();
                                     }
                                 });
+                                ui.add_space(6.0);
+                                theme::toolbar_row(ui, |ui| {
+                                    theme::field_label(ui, "截屏前隐藏等待");
+                                    ui.add_space(8.0);
+                                    let mut ms = self.hide_wait_ms();
+                                    ui.allocate_ui_with_layout(
+                                        egui::vec2(220.0, theme::CTRL_H),
+                                        egui::Layout::left_to_right(egui::Align::Center),
+                                        |ui| {
+                                            if ui
+                                                .add(
+                                                    egui::Slider::new(&mut ms, 500..=3000)
+                                                        .step_by(100.0)
+                                                        .suffix(" ms"),
+                                                )
+                                                .changed()
+                                            {
+                                                self.set_hide_wait_ms(ms);
+                                            }
+                                        },
+                                    );
+                                });
                                 if self.last_id.is_some() {
-                                    ui.separator();
-                                    ui.label("Quick state capture:");
-                                    ui.horizontal(|ui| {
+                                    ui.add_space(8.0);
+                                    theme::field_label(ui, "快捷状态");
+                                    ui.add_space(4.0);
+                                    theme::toolbar_row(ui, |ui| {
                                         for (key, label, suffix) in [
-                                            (egui::Key::F1, "F1  Normal (-n)", "-n"),
-                                            (egui::Key::F2, "F2  Selected (-s)", "-s"),
-                                            (egui::Key::F3, "F3  Clicked (-c)", "-c"),
-                                            (egui::Key::F4, "F4  Click+Sel (-cs)", "-cs"),
+                                            (egui::Key::F1, "F1  常态", "-n"),
+                                            (egui::Key::F2, "F2  选中", "-s"),
+                                            (egui::Key::F3, "F3  点击", "-c"),
+                                            (egui::Key::F4, "F4  点+选", "-cs"),
                                         ] {
                                             let pressed = ui.input(|i| i.key_pressed(key));
-                                            if ui.button(label).clicked() || pressed {
+                                            if theme::secondary_button(ui, label).clicked()
+                                                || pressed
+                                            {
                                                 self.forced_state_name = Some(suffix.to_string());
                                                 self.begin_capture(ctx, true);
                                             }
@@ -988,6 +1452,7 @@ impl RecorderApp {
                                 });
                             }
                         }
+                        }); // card_frame
                     });
             }
         }
