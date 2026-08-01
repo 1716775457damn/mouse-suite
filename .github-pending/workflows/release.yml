@@ -80,8 +80,9 @@ jobs:
           chmod +x "dist/${{ matrix.artifact }}"
           cp config.toml AGENT_BRIDGE.md README.md dist/
           if [ -d workflows ]; then cp -r workflows dist/; fi
-          tar -C dist -czf "dist/${{ matrix.artifact }}.tar.gz" \
-            --exclude='*.zip' --exclude='*.tar.gz' .
+          # Write archive outside dist/ so tar does not see its own output
+          tar -C dist -czf "${{ matrix.artifact }}.tar.gz" .
+          mv "${{ matrix.artifact }}.tar.gz" dist/
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
@@ -122,7 +123,7 @@ jobs:
             Multi-platform builds:
 
             - **Windows x86_64**: full recorder / clicker / flow / agent bridge
-            - **Linux x86_64**: experimental (GUI + agent bridge; click injection stubbed)
+            - **Linux x86_64** (Ubuntu 24.04+): experimental (GUI + agent bridge; click injection stubbed)
             - **macOS x86_64 / aarch64**: experimental (GUI + agent bridge; click injection stubbed)
 
             See `AGENT_BRIDGE.md` for agent automation API.
