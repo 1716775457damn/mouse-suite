@@ -53,13 +53,28 @@ Windows-first desktop automation suite that combines:
 6. 导出 **HTML** / **Markdown** / **JSON**；会话在 `data/scribe_sessions/`
 7. 会话右键可 **复制 / 删除**
 
-## 打包
+## 打包 / 安装包
+
+推送 `v*` tag 后，GitHub Actions 会构建多端安装包：
+
+| 平台 | 产物 |
+|------|------|
+| Windows | `*-setup.exe`（Inno Setup）+ portable zip |
+| macOS | `*.dmg`（拖到 Applications）+ `.app.zip` |
+| Linux | `*.deb` + tar.gz |
+
+本地 Windows 便携包：
 
 ```powershell
 .\scripts\package-release.ps1
 ```
 
-输出：`dist\mouse-suite-YYYYMMDD-win64.zip`（含 exe、README、首次运行说明）。
+本地 Windows 安装包（需 [Inno Setup 6](https://jrsoftware.org/isinfo.php)）：
+
+```powershell
+cargo build --release
+.\scripts\package-windows-installer.ps1 -Version 0.2.3
+```
 
 ## Requirements
 

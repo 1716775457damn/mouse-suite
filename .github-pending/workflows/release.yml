@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   build:
-    name: build-${{ matrix.os }}
+    name: build-${{ matrix.os }}-${{ matrix.artifact_arch }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -19,26 +19,41 @@ jobs:
         include:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            artifact: mouse-suite-windows-x86_64.exe
+            artifact_arch: windows-x86_64
             bin: mouse-suite.exe
           # xcap 0.9+ needs PipeWire headers newer than Ubuntu 22.04 ships
           - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
-            artifact: mouse-suite-linux-x86_64
+            artifact_arch: linux-x86_64
             bin: mouse-suite
           # Cross-compile Intel mac from Apple Silicon (macos-13 runners queue forever)
           - os: macos-14
             target: x86_64-apple-darwin
-            artifact: mouse-suite-macos-x86_64
+            artifact_arch: macos-x86_64
+            mac_arch: x86_64
             bin: mouse-suite
           - os: macos-14
             target: aarch64-apple-darwin
-            artifact: mouse-suite-macos-aarch64
+            artifact_arch: macos-aarch64
+            mac_arch: aarch64
             bin: mouse-suite
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: ver
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            V="${GITHUB_REF_NAME#v}"
+          else
+            V="$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)"/\1/')"
+            V="${V}-ci.${GITHUB_RUN_NUMBER}"
+          fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "Resolved version: $V"
 
       - name: Install Linux deps
         if: runner.os == 'Linux'
@@ -60,38 +75,81 @@ jobs:
       - name: Build release
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Prepare artifact (Windows)
+      - name: Package Windows installer + portable zip
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Copy-Item "target/${{ matrix.target }}/release/${{ matrix.bin }}" "dist/${{ matrix.artifact }}"
-          Copy-Item config.toml dist/
-          Copy-Item AGENT_BRIDGE.md dist/
-          Copy-Item README.md dist/
-          if (Test-Path workflows) { Copy-Item workflows dist/ -Recurse -Force }
-          Compress-Archive -Path dist\* -DestinationPath "dist/${{ matrix.artifact }}.zip" -Force
+          $ErrorActionPreference = "Stop"
+          $ver = "${{ steps.ver.outputs.version }}"
+          $bin = "target/${{ matrix.target }}/release/${{ matrix.bin }}"
 
-      - name: Prepare artifact (Unix)
-        if: runner.os != 'Windows'
+          choco install innosetup -y --no-progress
+          & "$env:ProgramFiles(x86)\Inno Setup 6\ISCC.exe" /? | Out-Null
+
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item $bin "dist/mouse-suite-windows-x86_64.exe"
+
+          # Portable zip
+          $portable = "dist/portable"
+          New-Item -ItemType Directory -Force -Path $portable | Out-Null
+          Copy-Item $bin "$portable/mouse-suite.exe"
+          Copy-Item config.toml, AGENT_BRIDGE.md, README.md, LICENSE $portable -ErrorAction SilentlyContinue
+          if (Test-Path workflows) { Copy-Item workflows $portable -Recurse -Force }
+          Compress-Archive -Path "$portable\*" -DestinationPath "dist/Mouse-Suite-$ver-windows-x86_64-portable.zip" -Force
+
+          # Inno Setup installer
+          .\scripts\package-windows-installer.ps1 -Binary (Resolve-Path $bin).Path -Version $ver
+
+      - name: Package Linux .deb + tarball
+        if: runner.os == 'Linux'
+        shell: bash
         run: |
+          set -euo pipefail
+          VER="${{ steps.ver.outputs.version }}"
+          BIN="target/${{ matrix.target }}/release/${{ matrix.bin }}"
           mkdir -p dist
-          cp "target/${{ matrix.target }}/release/${{ matrix.bin }}" "dist/${{ matrix.artifact }}"
-          chmod +x "dist/${{ matrix.artifact }}"
-          cp config.toml AGENT_BRIDGE.md README.md dist/
+          cp "$BIN" "dist/mouse-suite-linux-x86_64"
+          chmod +x "dist/mouse-suite-linux-x86_64"
+          cp config.toml AGENT_BRIDGE.md README.md dist/ || true
           if [ -d workflows ]; then cp -r workflows dist/; fi
-          # Write archive outside dist/ so tar does not see its own output
-          tar -C dist -czf "${{ matrix.artifact }}.tar.gz" .
-          mv "${{ matrix.artifact }}.tar.gz" dist/
+          (
+            cd dist
+            extras=(mouse-suite-linux-x86_64)
+            for f in config.toml AGENT_BRIDGE.md README.md; do
+              [[ -f "$f" ]] && extras+=("$f")
+            done
+            [[ -d workflows ]] && extras+=(workflows)
+            tar -czf "Mouse-Suite-${VER}-linux-x86_64.tar.gz" "${extras[@]}"
+          )
+          chmod +x scripts/package-linux-deb.sh
+          ./scripts/package-linux-deb.sh "$BIN" "$VER" dist
+
+      - name: Package macOS DMG + app zip
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          VER="${{ steps.ver.outputs.version }}"
+          BIN="target/${{ matrix.target }}/release/${{ matrix.bin }}"
+          ARCH="${{ matrix.mac_arch }}"
+          mkdir -p dist
+          cp "$BIN" "dist/mouse-suite-macos-${ARCH}"
+          chmod +x "dist/mouse-suite-macos-${ARCH}"
+          chmod +x scripts/package-macos-dmg.sh
+          ./scripts/package-macos-dmg.sh "$BIN" "$VER" "$ARCH" dist
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
+          name: mouse-suite-${{ matrix.artifact_arch }}
           path: |
-            dist/${{ matrix.artifact }}
-            dist/${{ matrix.artifact }}.zip
-            dist/${{ matrix.artifact }}.tar.gz
+            dist/*.exe
+            dist/*.zip
+            dist/*.dmg
+            dist/*.deb
+            dist/*.tar.gz
+            dist/mouse-suite-*
+          if-no-files-found: error
 
   release:
     name: publish-release
@@ -107,8 +165,13 @@ jobs:
       - name: Collect release files
         run: |
           mkdir -p upload
-          find artifacts -type f \( -name '*.exe' -o -name '*.zip' -o -name '*.tar.gz' -o -name 'mouse-suite-*' \) \
-            ! -name '*.md' ! -name 'config.toml' -exec cp {} upload/ \;
+          find artifacts -type f \( \
+            -name '*.exe' -o -name '*.zip' -o -name '*.tar.gz' \
+            -o -name '*.dmg' -o -name '*.deb' \
+            -o -name 'mouse-suite-*' \
+          \) ! -name '*.md' ! -name 'config.toml' ! -name 'LICENSE' \
+            -exec cp -n {} upload/ \;
+          # Prefer installers; keep portable archives too
           ls -lah upload
 
       - name: Create GitHub Release
@@ -120,11 +183,22 @@ jobs:
           body: |
             ## Mouse Suite ${{ github.ref_name }}
 
-            Multi-platform builds:
+            ### Installers (recommended)
 
-            - **Windows x86_64**: full recorder / clicker / flow / agent bridge
-            - **Linux x86_64** (Ubuntu 24.04+): experimental (GUI + agent bridge; click injection stubbed)
-            - **macOS x86_64 / aarch64**: experimental (GUI + agent bridge; click injection stubbed)
+            | Platform | Installer |
+            |----------|-----------|
+            | **Windows x86_64** | `Mouse-Suite-*-windows-x86_64-setup.exe` — run the setup wizard |
+            | **macOS Apple Silicon** | `Mouse-Suite-*-macos-aarch64.dmg` — open DMG, drag to Applications |
+            | **macOS Intel** | `Mouse-Suite-*-macos-x86_64.dmg` — open DMG, drag to Applications |
+            | **Linux x86_64** | `mouse-suite_*_amd64.deb` — `sudo dpkg -i …` |
+
+            Portable archives (zip / tar.gz / raw binary) are also attached.
+
+            ### Notes
+
+            - Windows: full recorder / clicker / flow / agent bridge
+            - Linux / macOS: experimental (GUI + agent bridge; click injection stubbed)
+            - macOS builds are **ad-hoc signed** (not Apple-notarized). On first open: right-click → Open, or allow under System Settings → Privacy & Security
 
             See `AGENT_BRIDGE.md` for agent automation API.
         env:
