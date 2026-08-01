@@ -84,7 +84,6 @@ jobs:
           $bin = "target/${{ matrix.target }}/release/${{ matrix.bin }}"
 
           choco install innosetup -y --no-progress
-          & "$env:ProgramFiles(x86)\Inno Setup 6\ISCC.exe" /? | Out-Null
 
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           Copy-Item $bin "dist/mouse-suite-windows-x86_64.exe"
@@ -97,7 +96,7 @@ jobs:
           if (Test-Path workflows) { Copy-Item workflows $portable -Recurse -Force }
           Compress-Archive -Path "$portable\*" -DestinationPath "dist/Mouse-Suite-$ver-windows-x86_64-portable.zip" -Force
 
-          # Inno Setup installer
+          # Inno Setup installer (script locates ISCC via ${env:ProgramFiles(x86)})
           .\scripts\package-windows-installer.ps1 -Binary (Resolve-Path $bin).Path -Version $ver
 
       - name: Package Linux .deb + tarball
