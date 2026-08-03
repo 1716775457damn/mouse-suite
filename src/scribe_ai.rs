@@ -206,7 +206,10 @@ fn encode_jpeg_b64(path: &Path, max_side: u32) -> Result<String, String> {
     let mut buf = Vec::new();
     rgb.write_to(&mut Cursor::new(&mut buf), image::ImageFormat::Jpeg)
         .map_err(|e| e.to_string())?;
-    Ok(base64::Engine::encode(&base64::engine::general_purpose::STANDARD, buf))
+    Ok(base64::Engine::encode(
+        &base64::engine::general_purpose::STANDARD,
+        buf,
+    ))
 }
 
 fn parse_descriptions(text: &str, n: usize) -> Vec<String> {
@@ -221,7 +224,10 @@ fn parse_descriptions(text: &str, n: usize) -> Vec<String> {
         text
     };
     if let Ok(arr) = serde_json::from_str::<Vec<serde_json::Value>>(json_slice) {
-        let mut out: Vec<String> = arr.iter().map(|v| v.as_str().unwrap_or("").to_string()).collect();
+        let mut out: Vec<String> = arr
+            .iter()
+            .map(|v| v.as_str().unwrap_or("").to_string())
+            .collect();
         while out.len() < n {
             out.push(String::new());
         }
@@ -385,11 +391,9 @@ pub fn extract_json_payload(text: &str) -> &str {
 
 /// 一次把全部步骤截图发给视觉模型，返回每步说明。
 pub fn describe_all(paths: &[std::path::PathBuf], cfg: &AiConfig) -> Result<Vec<String>, String> {
-    let (url, key, model) = cfg.endpoint()?;
     if paths.is_empty() {
         return Ok(Vec::new());
     }
-
     let prompt = format!(
         "这是按顺序的一组电脑操作截图，共 {} 步，每张图的红圈（若有）标注了该步的点击位置。\
          请结合整个流程的上下文，为每一步用一句简洁中文说明「这步做了什么」\
@@ -397,7 +401,82 @@ pub fn describe_all(paths: &[std::path::PathBuf], cfg: &AiConfig) -> Result<Vec<
          只返回一个 JSON 字符串数组，例如 [\"第一步说明\",\"第二步说明\"]，不要任何其他文字。",
         paths.len()
     );
+    let text = if cfg.is_ccswitch() {
+        describe_all_anthropic(paths, cfg, &prompt)?
+    } else {
+        describe_all_openai(paths, cfg, &prompt)?
+    };
+    if text.trim().is_empty() {
+        return Err("模型返回空内容".into());
+    }
+    Ok(parse_descriptions(&text, paths.len()))
+}
 
+fn describe_all_anthropic(
+    paths: &[std::path::PathBuf],
+    cfg: &AiConfig,
+    prompt: &str,
+) -> Result<String, String> {
+    let (url, _key, model) = cfg.endpoint()?;
+    let mut content = vec![serde_json::json!({"type": "text", "text": prompt})];
+    for p in paths {
+        let b64 = encode_jpeg_b64(p, 1024)?;
+        content.push(serde_json::json!({
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": "image/jpeg",
+                "data": b64
+            }
+        }));
+    }
+    let payload = serde_json::json!({
+        "model": model,
+        "max_tokens": (600i64).max(paths.len() as i64 * 80),
+        "temperature": 0.3,
+        "messages": [{ "role": "user", "content": content }],
+    });
+    let resp = ureq::post(&url)
+        .set("Content-Type", "application/json")
+        .set("anthropic-version", "2023-06-01")
+        .timeout(std::time::Duration::from_secs(180))
+        .send_json(payload)
+        .map_err(|e| {
+            format!("AI 请求失败: {e}（请确认 CC Switch 本地代理已开 :15721，顶部 Proxy 为绿色）")
+        })?;
+    let status = resp.status();
+    let body = resp.into_string().map_err(|e| e.to_string())?;
+    if !(200..300).contains(&status) {
+        return Err(format!(
+            "HTTP {status}: {}",
+            body.chars().take(240).collect::<String>()
+        ));
+    }
+    let v: serde_json::Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
+    // Prefer Anthropic `content[]`; also accept OpenAI-shaped proxy replies.
+    let text = anthropic_text(&v);
+    if !text.trim().is_empty() {
+        return Ok(text);
+    }
+    let openai = v["choices"][0]["message"]["content"]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
+    if openai.trim().is_empty() {
+        return Err(format!(
+            "模型返回空内容: {}",
+            body.chars().take(200).collect::<String>()
+        ));
+    }
+    Ok(openai)
+}
+
+fn describe_all_openai(
+    paths: &[std::path::PathBuf],
+    cfg: &AiConfig,
+    prompt: &str,
+) -> Result<String, String> {
+    let (url, key, model) = cfg.endpoint()?;
     let mut content = vec![serde_json::json!({"type":"text","text": prompt})];
     for p in paths {
         let b64 = encode_jpeg_b64(p, 1024)?;
@@ -428,10 +507,16 @@ pub fn describe_all(paths: &[std::path::PathBuf], cfg: &AiConfig) -> Result<Vec<
     let status = resp.status();
     let body = resp.into_string().map_err(|e| e.to_string())?;
     if status == 429 || status >= 500 {
-        return Err(format!("上游错误 {status}: {}", body.chars().take(160).collect::<String>()));
+        return Err(format!(
+            "上游错误 {status}: {}",
+            body.chars().take(160).collect::<String>()
+        ));
     }
     if !(200..300).contains(&status) {
-        return Err(format!("HTTP {status}: {}", body.chars().take(200).collect::<String>()));
+        return Err(format!(
+            "HTTP {status}: {}",
+            body.chars().take(200).collect::<String>()
+        ));
     }
 
     let v: serde_json::Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
@@ -439,8 +524,16 @@ pub fn describe_all(paths: &[std::path::PathBuf], cfg: &AiConfig) -> Result<Vec<
         .as_str()
         .unwrap_or("")
         .to_string();
-    if text.is_empty() {
-        return Err("模型返回空内容".into());
+    if text.trim().is_empty() {
+        // Some proxies wrap Anthropic responses even on OpenAI URLs.
+        let alt = anthropic_text(&v);
+        if !alt.trim().is_empty() {
+            return Ok(alt);
+        }
+        return Err(format!(
+            "模型返回空内容: {}",
+            body.chars().take(200).collect::<String>()
+        ));
     }
-    Ok(parse_descriptions(&text, paths.len()))
+    Ok(text)
 }

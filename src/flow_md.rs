@@ -90,8 +90,8 @@ pub fn export_markdown(
 /// Parse Markdown: prefer ```mouse-suite-flow``` JSON; else best-effort Mermaid.
 pub fn import_markdown(md: &str) -> Result<(String, FlowDocument), String> {
     if let Some(json) = extract_fence(md, "mouse-suite-flow") {
-        let file: MdFlowFile =
-            serde_json::from_str(json.trim()).map_err(|e| format!("mouse-suite-flow JSON 解析失败: {e}"))?;
+        let file: MdFlowFile = serde_json::from_str(json.trim())
+            .map_err(|e| format!("mouse-suite-flow JSON 解析失败: {e}"))?;
         let title = if file.title.trim().is_empty() {
             extract_title(md).unwrap_or_else(|| "未命名流程".into())
         } else {

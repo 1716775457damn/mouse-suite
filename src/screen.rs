@@ -67,10 +67,7 @@ pub fn monitor_at(x: i32, y: i32) -> Result<Monitor, String> {
     if let Some(m) = monitors.iter().find(|m| monitor_contains(m, x, y)) {
         return Ok(m.clone());
     }
-    if let Some(m) = monitors
-        .iter()
-        .find(|m| m.is_primary().unwrap_or(false))
-    {
+    if let Some(m) = monitors.iter().find(|m| m.is_primary().unwrap_or(false)) {
         return Ok(m.clone());
     }
     monitors
@@ -83,9 +80,7 @@ pub fn capture_at_point(x: i32, y: i32) -> Result<CapturedMonitor, String> {
     let mon = monitor_at(x, y)?;
     let mx = mon.x().unwrap_or(0);
     let my = mon.y().unwrap_or(0);
-    let img = mon
-        .capture_image()
-        .map_err(|e| format!("capture: {e}"))?;
+    let img = mon.capture_image().map_err(|e| format!("capture: {e}"))?;
     let width = img.width();
     let height = img.height();
     Ok(CapturedMonitor {

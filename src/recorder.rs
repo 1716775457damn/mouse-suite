@@ -1,14 +1,14 @@
 use crate::common::{data_dir, Config};
+use crate::mouse_hook::RecorderMsg;
 use crate::theme;
 use chrono::Local;
 use eframe::egui::{self, Color32, FontId, Pos2, Rect, ScrollArea, Stroke};
-use rdev::{grab, Button, Event, EventType};
 use rusqlite::{params, Connection};
 use std::fs;
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::mpsc;
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -20,12 +20,7 @@ fn log_error(msg: &str) {
         .append(true)
         .open(&log_path)
     {
-        let _ = writeln!(
-            f,
-            "[{}] {}",
-            Local::now().format("%Y-%m-%d %H:%M:%S"),
-            msg
-        );
+        let _ = writeln!(f, "[{}] {}", Local::now().format("%Y-%m-%d %H:%M:%S"), msg);
     }
 }
 
@@ -66,11 +61,7 @@ fn get_resolution() -> (u32, u32) {
         .unwrap_or((1920, 1080))
 }
 
-fn load_element_thumb(
-    ctx: &egui::Context,
-    path: &str,
-    id: i32,
-) -> Option<egui::TextureHandle> {
+fn load_element_thumb(ctx: &egui::Context, path: &str, id: i32) -> Option<egui::TextureHandle> {
     let img = image::open(path).ok()?.into_rgba8();
     let (w, h) = (img.width(), img.height());
     let max_side = 160u32;
@@ -340,57 +331,6 @@ enum AppMode {
     InputExport,
 }
 
-enum CaptureMsg {
-    Down(f64, f64),
-    Up(f64, f64),
-    Move(f64, f64),
-}
-
-fn start_listener(flag: Arc<AtomicBool>, tx: Sender<CaptureMsg>) {
-    thread::spawn(move || {
-        let last_pos: Arc<Mutex<(f64, f64)>> = Arc::new(Mutex::new((0.0, 0.0)));
-        let last_pos_cb = Arc::clone(&last_pos);
-        let cb = move |event: Event| -> Option<Event> {
-            let capturing = flag.load(Ordering::Relaxed);
-            match event.event_type {
-                EventType::MouseMove { x, y } => {
-                    if let Ok(mut pos) = last_pos_cb.lock() {
-                        *pos = (x, y);
-                    }
-                    if capturing {
-                        let _ = tx.send(CaptureMsg::Move(x, y));
-                    }
-                    Some(event)
-                }
-                EventType::ButtonPress(Button::Left) => {
-                    if capturing {
-                        if let Ok(pos) = last_pos_cb.lock() {
-                            let _ = tx.send(CaptureMsg::Down(pos.0, pos.1));
-                        }
-                        None
-                    } else {
-                        Some(event)
-                    }
-                }
-                EventType::ButtonRelease(Button::Left) => {
-                    if capturing {
-                        if let Ok(pos) = last_pos_cb.lock() {
-                            let _ = tx.send(CaptureMsg::Up(pos.0, pos.1));
-                        }
-                        None
-                    } else {
-                        Some(event)
-                    }
-                }
-                _ => Some(event),
-            }
-        };
-        if let Err(e) = grab(cb) {
-            log_error(&format!("rdev grab error: {:?}", e));
-        }
-    });
-}
-
 pub struct RecorderApp {
     conn: Connection,
     config: Config,
@@ -407,7 +347,7 @@ pub struct RecorderApp {
     mode: AppMode,
     input: String,
     status: String,
-    rx: mpsc::Receiver<CaptureMsg>,
+    rx: mpsc::Receiver<RecorderMsg>,
     capture_flag: Arc<AtomicBool>,
     drag_start: Option<(i32, i32)>,
     drag_current: Option<(i32, i32)>,
@@ -427,7 +367,11 @@ pub struct RecorderApp {
 }
 
 impl RecorderApp {
-    pub fn new(config: Config) -> Self {
+    pub fn new(
+        config: Config,
+        capture_flag: Arc<AtomicBool>,
+        rx: mpsc::Receiver<RecorderMsg>,
+    ) -> Self {
         let db_path = config.db_path();
         let image_dir = config.image_dir();
         let _ = fs::create_dir_all(&image_dir);
@@ -435,9 +379,6 @@ impl RecorderApp {
         let (sw, sh) = get_resolution();
         let elems = load_elements(&conn, &image_dir);
         let last = elems.last().map(|e| e.id);
-        let flag = Arc::new(AtomicBool::new(false));
-        let (tx, rx) = mpsc::channel();
-        start_listener(flag.clone(), tx);
         Self {
             conn,
             config,
@@ -455,7 +396,7 @@ impl RecorderApp {
             input: String::new(),
             status: "Ready. Click [New Element] to record".into(),
             rx,
-            capture_flag: flag,
+            capture_flag,
             drag_start: None,
             drag_current: None,
             mouse_pos: None,
@@ -521,7 +462,11 @@ impl RecorderApp {
     }
 
     /// Agent entrypoint: start add-state capture for current element.
-    pub fn agent_start_add_state_capture(&mut self, ctx: &egui::Context, forced_state: Option<String>) {
+    pub fn agent_start_add_state_capture(
+        &mut self,
+        ctx: &egui::Context,
+        forced_state: Option<String>,
+    ) {
         self.forced_state_name = forced_state;
         self.forced_element_name = None;
         self.begin_capture(ctx, true);
@@ -660,7 +605,9 @@ impl RecorderApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
             ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(true));
             ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(700.0, 550.0)));
-            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(100.0, 100.0)));
+            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(
+                100.0, 100.0,
+            )));
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             return;
         }
@@ -700,7 +647,9 @@ impl RecorderApp {
             egui::WindowLevel::Normal,
         ));
         ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(700.0, 550.0)));
-        ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(100.0, 100.0)));
+        ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(
+            100.0, 100.0,
+        )));
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
         ctx.send_viewport_cmd(egui::ViewportCommand::RequestUserAttention(
@@ -724,7 +673,7 @@ impl RecorderApp {
                 }
                 while let Ok(msg) = self.rx.try_recv() {
                     match msg {
-                        CaptureMsg::Down(x, y) => {
+                        RecorderMsg::Down(x, y) => {
                             self.drag_start = Some((x as i32, y as i32));
                             self.drag_current = Some((x as i32, y as i32));
                             self.status = format!(
@@ -732,13 +681,13 @@ impl RecorderApp {
                                 x as i32, y as i32
                             );
                         }
-                        CaptureMsg::Move(x, y) => {
+                        RecorderMsg::Move(x, y) => {
                             self.mouse_pos = Some((x as i32, y as i32));
                             if self.drag_start.is_some() {
                                 self.drag_current = Some((x as i32, y as i32));
                             }
                         }
-                        CaptureMsg::Up(x, y) => {
+                        RecorderMsg::Up(x, y) => {
                             log_error("capture up start");
                             let saved_start = self.drag_start.take();
                             let pre_img = self.pre_capture.take();
@@ -769,7 +718,8 @@ impl RecorderApp {
                                         Err("Zero region".into())
                                     } else {
                                         let lpx = (px as u32).min(full.1.width().saturating_sub(1));
-                                        let lpy = (py as u32).min(full.1.height().saturating_sub(1));
+                                        let lpy =
+                                            (py as u32).min(full.1.height().saturating_sub(1));
                                         let lpw = pw.min(full.1.width().saturating_sub(lpx));
                                         let lph = ph.min(full.1.height().saturating_sub(lpy));
                                         if lpw == 0 || lph == 0 {
@@ -792,9 +742,9 @@ impl RecorderApp {
                                                 }
                                             }
                                             match cropped.save(&path) {
-                                                Ok(_) => Ok((
-                                                    abs_x1, abs_y1, abs_x2, abs_y2, path_s,
-                                                )),
+                                                Ok(_) => {
+                                                    Ok((abs_x1, abs_y1, abs_x2, abs_y2, path_s))
+                                                }
                                                 Err(e) => Err(format!("Save failed: {}", e)),
                                             }
                                         }
@@ -814,10 +764,10 @@ impl RecorderApp {
                                             self.last_element_name.clone(),
                                             self.last_state_name.clone(),
                                         ) {
-                                            let next_state = self
-                                                .forced_state_name
-                                                .take()
-                                                .unwrap_or_else(|| get_next_state_suffix(&last_state));
+                                            let next_state =
+                                                self.forced_state_name.take().unwrap_or_else(
+                                                    || get_next_state_suffix(&last_state),
+                                                );
                                             let new_path = std::path::Path::new(&self.image_dir)
                                                 .join(format!("{}_{}.png", elem_name, next_state))
                                                 .to_string_lossy()
@@ -917,10 +867,7 @@ impl RecorderApp {
                         let scale = self.scale.max(0.01);
                         // Absolute screen pixels → overlay-local egui points
                         let to_local = |sx: i32, sy: i32| -> (f32, f32) {
-                            (
-                                (sx - ox) as f32 / scale,
-                                (sy - oy) as f32 / scale,
-                            )
+                            ((sx - ox) as f32 / scale, (sy - oy) as f32 / scale)
                         };
 
                         if let Some((tex, _)) = &self.pre_capture {
@@ -1040,11 +987,7 @@ impl RecorderApp {
                                 } else {
                                     mx - 12.0 - coord.len() as f32 * 7.5
                                 };
-                                let tip_y = if my + 28.0 < sh {
-                                    my + 12.0
-                                } else {
-                                    my - 28.0
-                                };
+                                let tip_y = if my + 28.0 < sh { my + 12.0 } else { my - 28.0 };
                                 let tip_bg = Rect::from_min_size(
                                     Pos2::new(tip_x, tip_y),
                                     egui::vec2(coord.len() as f32 * 7.5, 20.0),
@@ -1078,381 +1021,604 @@ impl RecorderApp {
             }
             _ => {
                 egui::CentralPanel::default()
-                    .frame(egui::Frame::none().fill(theme::colors::BG))
+                    .frame(egui::Frame::none().fill(theme::col().BG))
                     .show(ctx, |ui| {
                         theme::paint_atmosphere(ui);
-                        theme::card_frame().show(ui, |ui| {
-                        ui.add_space(2.0);
-                        theme::section_header(
-                            ui,
-                            "元素库",
-                            &format!(
-                                "屏幕 {}×{} · {} 个元素 · 框选区域保存为模板",
-                                self.sw,
-                                self.sh,
-                                self.elements.len()
-                            ),
-                        );
-
-                        self.ensure_previews(ctx);
-
-                        ui.horizontal(|ui| {
-                            ui.label(
-                                egui::RichText::new("筛选")
-                                    .size(12.0)
-                                    .color(theme::colors::MUTED),
-                            );
-                            ui.add(
-                                egui::TextEdit::singleline(&mut self.filter)
-                                    .desired_width(220.0)
-                                    .hint_text("按名称过滤…"),
-                            );
-                        });
-                        ui.add_space(8.0);
-
-                        theme::inset_frame().show(ui, |ui| {
-                            let filter = self.filter.to_lowercase();
-                            let indices: Vec<usize> = self
-                                .elements
-                                .iter()
-                                .enumerate()
-                                .filter(|(_, e)| {
-                                    filter.is_empty()
-                                        || e.name.to_lowercase().contains(&filter)
-                                })
-                                .map(|(i, _)| i)
-                                .collect();
-
-                            ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
-                                if indices.is_empty() {
-                                    ui.label(
-                                        egui::RichText::new(if self.elements.is_empty() {
-                                            "暂无元素。点击「新建元素」开始录制模板。"
-                                        } else {
-                                            "没有匹配的元素。"
-                                        })
-                                        .color(theme::colors::MUTED),
-                                    );
-                                    return;
-                                }
-
-                                let avail = ui.available_width();
-                                let card_w = 132.0_f32;
-                                let gap = 10.0_f32;
-                                let cols =
-                                    ((avail + gap) / (card_w + gap)).floor().max(1.0) as usize;
-
-                                egui::Grid::new("element_gallery")
-                                    .num_columns(cols)
-                                    .spacing([gap, gap])
-                                    .show(ui, |ui| {
-                                        for (n, &i) in indices.iter().enumerate() {
-                                            let selected =
-                                                Some(self.elements[i].id) == self.last_id;
-                                            let name = self.elements[i].name.clone();
-                                            let id = self.elements[i].id;
-                                            let cx = self.elements[i].cx;
-                                            let cy = self.elements[i].cy;
-                                            let n_states = self.elements[i].states.len();
-                                            let tex =
-                                                self.previews.get(i).and_then(|t| t.as_ref());
-
-                                            let resp = theme::panel_frame().show(ui, |ui| {
-                                                ui.set_width(card_w - 8.0);
-                                                ui.set_min_height(148.0);
-
-                                                let thumb = egui::vec2(108.0, 72.0);
-                                                let (rect, _) = ui.allocate_exact_size(
-                                                    thumb,
-                                                    egui::Sense::hover(),
-                                                );
-                                                ui.painter().rect_filled(
-                                                    rect,
-                                                    8.0,
-                                                    theme::colors::INSET,
-                                                );
-                                                if let Some(tex) = tex {
-                                                    let size = tex.size_vec2();
-                                                    let s = (thumb.x / size.x)
-                                                        .min(thumb.y / size.y)
-                                                        .min(1.0);
-                                                    let disp = size * s;
-                                                    let img_rect = egui::Rect::from_center_size(
-                                                        rect.center(),
-                                                        disp,
+                        ui.horizontal_top(|ui| {
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(216.0, ui.available_height()),
+                                egui::Layout::top_down(egui::Align::Min),
+                                |ui| {
+                                    egui::Frame::none()
+                                        .fill(theme::col().CHROME)
+                                        .stroke(egui::Stroke::new(1.0, theme::col().PANEL_EDGE))
+                                        .rounding(egui::Rounding::same(8.0))
+                                        .inner_margin(egui::Margin::same(16.0))
+                                        .show(ui, |ui| {
+                                            ui.label(
+                                                egui::RichText::new("元素资源")
+                                                    .size(16.0)
+                                                    .strong()
+                                                    .color(theme::col().TEXT),
+                                            );
+                                            ui.label(
+                                                egui::RichText::new("视觉自动化素材库")
+                                                    .size(11.0)
+                                                    .color(theme::col().MUTED),
+                                            );
+                                            ui.add_space(8.0);
+                                            theme::status_pill(
+                                                ui,
+                                                &format!("{} 个已录制元素", self.elements.len()),
+                                                theme::StatusTone::Idle,
+                                            );
+                                            ui.add_space(14.0);
+                                            egui::Frame::none()
+                                                .fill(theme::col().ACCENT)
+                                                .rounding(egui::Rounding::same(8.0))
+                                                .inner_margin(egui::Margin::same(12.0))
+                                                .show(ui, |ui| {
+                                                    ui.label(
+                                                        egui::RichText::new("捕捉新元素")
+                                                            .size(14.0)
+                                                            .strong()
+                                                            .color(egui::Color32::WHITE),
                                                     );
-                                                    ui.painter().image(
-                                                        tex.id(),
-                                                        img_rect,
-                                                        egui::Rect::from_min_max(
-                                                            egui::pos2(0.0, 0.0),
-                                                            egui::pos2(1.0, 1.0),
-                                                        ),
-                                                        egui::Color32::WHITE,
+                                                    ui.add_space(2.0);
+                                                    ui.label(
+                                                        egui::RichText::new(crate::i18n::t("recorder.header.subtitle"))
+                                                            .size(11.0)
+                                                            .color(egui::Color32::from_white_alpha(215)),
                                                     );
-                                                } else {
-                                                    ui.painter().text(
-                                                        rect.center(),
-                                                        egui::Align2::CENTER_CENTER,
-                                                        "无图",
-                                                        egui::FontId::proportional(12.0),
-                                                        theme::colors::FAINT,
-                                                    );
-                                                }
-
-                                                ui.add_space(6.0);
+                                                    ui.add_space(10.0);
+                                                    let button = egui::Button::new(
+                                                        egui::RichText::new(crate::i18n::t("recorder.capture.start"))
+                                                            .strong()
+                                                            .color(theme::col().ACCENT_DIM),
+                                                    )
+                                                    .fill(egui::Color32::WHITE)
+                                                    .stroke(egui::Stroke::NONE)
+                                                    .min_size(egui::vec2(ui.available_width(), theme::CTRL_H));
+                                                    if ui.add(button).clicked() {
+                                                        self.forced_state_name = None;
+                                                        self.begin_capture(ctx, false);
+                                                    }
+                                                });
+                                            ui.add_space(14.0);
+                                            theme::hairline(ui);
+                                            theme::field_label(ui, "工作区");
+                                            ui.label(
+                                                egui::RichText::new(format!(
+                                                    "{} x {}",
+                                                    self.sw, self.sh
+                                                ))
+                                                .size(13.0)
+                                                .strong()
+                                                .color(theme::col().TEXT),
+                                            );
+                                            ui.add_space(14.0);
+                                            theme::hairline(ui);
+                                            theme::field_label(ui, "当前选择");
+                                            if let Some(name) = &self.last_element_name {
                                                 ui.label(
-                                                    egui::RichText::new(&name)
+                                                    egui::RichText::new(name)
                                                         .size(13.0)
                                                         .strong()
-                                                        .color(if selected {
-                                                            theme::colors::ACCENT
-                                                        } else {
-                                                            theme::colors::TEXT
-                                                        }),
+                                                        .color(theme::col().ACCENT_DIM),
                                                 );
+                                            } else {
                                                 ui.label(
-                                                    egui::RichText::new(format!(
-                                                        "#{id} · ({cx},{cy}) · {n_states}态"
-                                                    ))
-                                                    .size(11.0)
-                                                    .color(theme::colors::MUTED),
+                                                    egui::RichText::new("从右侧选择一个元素")
+                                                        .size(11.0)
+                                                        .color(theme::col().MUTED),
                                                 );
-                                            });
-
-                                            let click = ui.interact(
-                                                resp.response.rect,
-                                                ui.id().with(("el_card", id)),
-                                                egui::Sense::click(),
-                                            );
-                                            if selected {
-                                                ui.painter().rect_stroke(
-                                                    resp.response.rect,
-                                                    14.0,
-                                                    egui::Stroke::new(2.0, theme::colors::ACCENT),
-                                                );
-                                            } else if click.hovered() {
-                                                ui.painter().rect_stroke(
-                                                    resp.response.rect,
-                                                    14.0,
-                                                    egui::Stroke::new(
-                                                        1.0,
-                                                        theme::colors::PANEL_EDGE,
+                                            }
+                                        });
+                                },
+                            );
+                            ui.add_space(10.0);
+                            ui.vertical(|ui| {
+                                ui.set_width(ui.available_width());
+                                egui::Frame::none()
+                                    .inner_margin(egui::Margin::symmetric(20.0, 18.0))
+                                    .show(ui, |ui| {
+                                        ui.add_space(2.0);
+                                        ui.horizontal(|ui| {
+                                            ui.vertical(|ui| {
+                                                theme::section_header(
+                                                    ui,
+                                                    crate::i18n::t("recorder.header.title"),
+                                                    &format!(
+                                                        "屏幕 {}×{} · {} 个元素 · 框选区域保存为模板",
+                                                        self.sw,
+                                                        self.sh,
+                                                        self.elements.len()
                                                     ),
                                                 );
-                                            }
-                                            if click.clicked() {
-                                                self.last_id = Some(id);
-                                                self.last_element_name = Some(name);
-                                                self.status = format!("已选中 #{id}");
-                                            }
-
-                                            if (n + 1) % cols == 0 {
-                                                ui.end_row();
-                                            }
-                                        }
-                                    });
-                            });
-                        });
-
-                        ui.add_space(8.0);
-                        ui.separator();
-                        ui.colored_label(theme::colors::SUCCESS, &self.status);
-
-                        match &self.mode {
-                            AppMode::Normal => {
-                                theme::toolbar_row(ui, |ui| {
-                                    if theme::primary_button(ui, "新建元素  F5").clicked()
-                                        || ui.input(|i| i.key_pressed(egui::Key::F5))
-                                    {
-                                        self.forced_state_name = None;
-                                        self.begin_capture(ctx, false);
-                                    }
-                                    if self.last_id.is_some() {
-                                        if theme::secondary_button(ui, "添加状态  F6").clicked()
-                                            || ui.input(|i| i.key_pressed(egui::Key::F6))
-                                        {
-                                            self.forced_state_name = None;
-                                            self.begin_capture(ctx, true);
-                                        }
-                                    }
-                                    if theme::secondary_button(ui, "导出 CSV").clicked() {
-                                        self.mode = AppMode::InputExport;
-                                        self.input.clear();
-                                        self.status = "输入导出文件名:".into();
-                                    }
-                                    if theme::secondary_button(ui, "刷新").clicked() {
-                                        self.refresh();
-                                        self.status = "已刷新".into();
-                                    }
-                                });
-                                ui.add_space(6.0);
-                                theme::toolbar_row(ui, |ui| {
-                                    theme::field_label(ui, "截屏前隐藏等待");
-                                    ui.add_space(8.0);
-                                    let mut ms = self.hide_wait_ms();
-                                    ui.allocate_ui_with_layout(
-                                        egui::vec2(220.0, theme::CTRL_H),
-                                        egui::Layout::left_to_right(egui::Align::Center),
-                                        |ui| {
-                                            if ui
-                                                .add(
-                                                    egui::Slider::new(&mut ms, 500..=3000)
-                                                        .step_by(100.0)
-                                                        .suffix(" ms"),
-                                                )
-                                                .changed()
-                                            {
-                                                self.set_hide_wait_ms(ms);
-                                            }
-                                        },
-                                    );
-                                });
-                                if self.last_id.is_some() {
-                                    ui.add_space(8.0);
-                                    theme::field_label(ui, "快捷状态");
-                                    ui.add_space(4.0);
-                                    theme::toolbar_row(ui, |ui| {
-                                        for (key, label, suffix) in [
-                                            (egui::Key::F1, "F1  常态", "-n"),
-                                            (egui::Key::F2, "F2  选中", "-s"),
-                                            (egui::Key::F3, "F3  点击", "-c"),
-                                            (egui::Key::F4, "F4  点+选", "-cs"),
-                                        ] {
-                                            let pressed = ui.input(|i| i.key_pressed(key));
-                                            if theme::secondary_button(ui, label).clicked()
-                                                || pressed
-                                            {
-                                                self.forced_state_name = Some(suffix.to_string());
-                                                self.begin_capture(ctx, true);
-                                            }
-                                        }
-                                    });
-                                }
-                            }
-                            AppMode::Capturing => {
-                                ui.colored_label(
-                                    Color32::RED,
-                                    "Click and drag on screen to select region",
-                                );
-                                if ui.button("Cancel").clicked() {
-                                    self.end_capture(ctx);
-                                    self.mode = AppMode::Normal;
-                                    self.status = "Cancelled".into();
-                                }
-                            }
-                            _ => {
-                                let prompt = match &self.mode {
-                                    AppMode::InputName(..) => "Element name:",
-                                    AppMode::InputState(..) => "State name (default: -n):",
-                                    AppMode::InputExport => "Export filename (no extension):",
-                                    _ => "",
-                                };
-                                ui.label(prompt);
-                                let resp = ui.text_edit_singleline(&mut self.input);
-                                ui.horizontal(|ui| {
-                                    if ui.button("OK").clicked()
-                                        || (resp.has_focus()
-                                            && ui.input_mut(|i| i.key_pressed(egui::Key::Enter)))
-                                    {
-                                        let val = self.input.trim().to_string();
-                                        let old =
-                                            std::mem::replace(&mut self.mode, AppMode::Normal);
-                                        match old {
-                                            AppMode::InputName(x1, y1, x2, y2, img)
-                                                if !val.is_empty() =>
-                                            {
-                                                self.mode = AppMode::InputState(
-                                                    x1,
-                                                    y1,
-                                                    x2,
-                                                    y2,
-                                                    img,
-                                                    val,
-                                                    "-n".to_string(),
-                                                );
-                                                self.input.clear();
-                                                self.status =
-                                                    "Enter state name (default: -n):".into();
-                                            }
-                                            AppMode::InputState(
-                                                x1,
-                                                y1,
-                                                x2,
-                                                y2,
-                                                img,
-                                                name,
-                                                default_state,
-                                            ) => {
-                                                let state_name = if val.is_empty() {
-                                                    default_state
-                                                } else {
-                                                    val
-                                                };
-                                                let new_path = std::path::Path::new(&self.image_dir)
-                                                    .join(format!("{}_{}.png", name, state_name))
-                                                    .to_string_lossy()
-                                                    .to_string();
-                                                let img_path =
-                                                    if std::fs::rename(&img, &new_path).is_ok() {
-                                                        new_path
-                                                    } else {
-                                                        img
-                                                    };
-                                                match create_elem(
-                                                    &self.conn,
-                                                    &name,
-                                                    &state_name,
-                                                    x1,
-                                                    y1,
-                                                    x2,
-                                                    y2,
-                                                    &img_path,
-                                                    self.sw,
-                                                    self.sh,
-                                                ) {
-                                                    Ok(id) => {
-                                                        self.last_id = Some(id);
-                                                        self.last_element_name = Some(name.clone());
-                                                        self.last_state_name =
-                                                            Some(state_name.clone());
-                                                        self.status =
-                                                            format!("Element #{} created!", id);
+                                            });
+                                            ui.with_layout(
+                                                egui::Layout::right_to_left(egui::Align::Center),
+                                                |ui| {
+                                                    if theme::primary_button(ui, crate::i18n::t("recorder.btn.new")).clicked()
+                                                        || ui.input(|i| i.key_pressed(egui::Key::F5))
+                                                    {
+                                                        self.forced_state_name = None;
+                                                        self.begin_capture(ctx, false);
+                                                    }
+                                                    ui.add_space(6.0);
+                                                    if theme::secondary_button(ui, crate::i18n::t("recorder.btn.refresh")).clicked() {
                                                         self.refresh();
+                                                        self.status = "已刷新".into();
                                                     }
-                                                    Err(e) => {
-                                                        self.status = format!("Error: {}", e)
+                                                },
+                                            );
+                                        });
+
+                                        self.ensure_previews(ctx);
+                                        let matching_count = {
+                                            let filter = self.filter.to_lowercase();
+                                            self.elements
+                                                .iter()
+                                                .filter(|element| {
+                                                    filter.is_empty()
+                                                        || element
+                                                            .name
+                                                            .to_lowercase()
+                                                            .contains(&filter)
+                                                })
+                                                .count()
+                                        };
+
+                                        ui.horizontal(|ui| {
+                                            ui.label(
+                                                egui::RichText::new(crate::i18n::t("recorder.filter"))
+                                                    .size(12.0)
+                                                    .color(theme::col().MUTED),
+                                            );
+                                            ui.add(
+                                                egui::TextEdit::singleline(&mut self.filter)
+                                                    .desired_width(220.0)
+                                                    .hint_text(crate::i18n::t("recorder.filter.hint")),
+                                            );
+                                            ui.with_layout(
+                                                egui::Layout::right_to_left(egui::Align::Center),
+                                                |ui| {
+                                                    theme::status_pill(
+                                                        ui,
+                                                        &format!("{} 个匹配", matching_count),
+                                                        theme::StatusTone::Idle,
+                                                    );
+                                                },
+                                            );
+                                        });
+                                        ui.add_space(8.0);
+
+                                        theme::inset_frame().show(ui, |ui| {
+                                            let filter = self.filter.to_lowercase();
+                                            let indices: Vec<usize> = self
+                                                .elements
+                                                .iter()
+                                                .enumerate()
+                                                .filter(|(_, e)| {
+                                                    filter.is_empty()
+                                                        || e.name.to_lowercase().contains(&filter)
+                                                })
+                                                .map(|(i, _)| i)
+                                                .collect();
+
+                                            // Leave room for the action rows so they stay visible at the
+                                            // minimum window height, while larger windows reveal more items.
+                                            // Use most of the remaining column; expand on taller windows.
+                                            let gallery_height =
+                                                (ui.available_height() - 140.0).clamp(140.0, 900.0);
+                                            ScrollArea::vertical().max_height(gallery_height).show(
+                                                ui,
+                                                |ui| {
+                                                    if indices.is_empty() {
+                                                        ui.label(
+                                            egui::RichText::new(if self.elements.is_empty() {
+                                                crate::i18n::t("recorder.empty")
+                                            } else {
+                                                crate::i18n::t("recorder.no_match")
+                                            })
+                                            .color(theme::col().MUTED),
+                                        );
+                                                        return;
                                                     }
+
+                                                    let avail = ui.available_width();
+                                                    let min_card_w = 164.0_f32;
+                                                    let gap = 10.0_f32;
+                                                    let cols = ((avail + gap) / (min_card_w + gap))
+                                                        .floor()
+                                                        .max(1.0)
+                                                        as usize;
+                                                    let card_w = (avail
+                                                        - gap * (cols.saturating_sub(1) as f32))
+                                                        / cols as f32;
+
+                                                    egui::Grid::new("element_gallery")
+                                                        .num_columns(cols)
+                                                        .min_col_width(card_w)
+                                                        .max_col_width(card_w)
+                                                        .spacing([gap, gap])
+                                                        .show(ui, |ui| {
+                                                            for (n, &i) in
+                                                                indices.iter().enumerate()
+                                                            {
+                                                                let selected =
+                                                                    Some(self.elements[i].id)
+                                                                        == self.last_id;
+                                                                let name =
+                                                                    self.elements[i].name.clone();
+                                                                let id = self.elements[i].id;
+                                                                let cx = self.elements[i].cx;
+                                                                let cy = self.elements[i].cy;
+                                                                let n_states =
+                                                                    self.elements[i].states.len();
+                                                                let tex = self
+                                                                    .previews
+                                                                    .get(i)
+                                                                    .and_then(|t| t.as_ref());
+
+                                                                let resp = theme::panel_frame()
+                                                                    .show(ui, |ui| {
+                                                                        let content_w = (card_w
+                                                                            - 28.0)
+                                                                            .max(112.0);
+                                                                        ui.set_min_width(content_w);
+                                                                        ui.set_max_width(content_w);
+                                                                        ui.set_min_height(172.0);
+                                                                        ui.with_layout(
+                                                        egui::Layout::top_down(egui::Align::Min),
+                                                        |ui| {
+
+                                                    let thumb = egui::vec2(content_w, 92.0);
+                                                    let (rect, _) = ui.allocate_exact_size(
+                                                        thumb,
+                                                        egui::Sense::hover(),
+                                                    );
+                                                    ui.painter().rect_filled(
+                                                        rect,
+                                                        6.0,
+                                                        theme::col().INSET,
+                                                    );
+                                                    if let Some(tex) = tex {
+                                                        let size = tex.size_vec2();
+                                                        let s = (thumb.x / size.x)
+                                                            .min(thumb.y / size.y)
+                                                            .min(1.0);
+                                                        let disp = size * s;
+                                                        let img_rect = egui::Rect::from_center_size(
+                                                            rect.center(),
+                                                            disp,
+                                                        );
+                                                        ui.painter().image(
+                                                            tex.id(),
+                                                            img_rect,
+                                                            egui::Rect::from_min_max(
+                                                                egui::pos2(0.0, 0.0),
+                                                                egui::pos2(1.0, 1.0),
+                                                            ),
+                                                            egui::Color32::WHITE,
+                                                        );
+                                                    } else {
+                                                        ui.painter().text(
+                                                            rect.center(),
+                                                            egui::Align2::CENTER_CENTER,
+                                                            "无图",
+                                                            egui::FontId::proportional(12.0),
+                                                            theme::col().FAINT,
+                                                        );
+                                                    }
+
+                                                    ui.add_space(8.0);
+                                                    ui.label(
+                                                        egui::RichText::new(&name)
+                                                            .size(13.0)
+                                                            .strong()
+                                                            .color(if selected {
+                                                                theme::col().ACCENT
+                                                            } else {
+                                                                theme::col().TEXT
+                                                            }),
+                                                    );
+                                                    ui.label(
+                                                        egui::RichText::new(format!(
+                                                            "#{id} · ({cx},{cy}) · {n_states}态"
+                                                        ))
+                                                        .size(11.0)
+                                                        .color(theme::col().MUTED),
+                                                    );
+                                                        },
+                                                    );
+                                                                    });
+
+                                                                let click = ui.interact(
+                                                                    resp.response.rect,
+                                                                    ui.id().with(("el_card", id)),
+                                                                    egui::Sense::click(),
+                                                                );
+                                                                if selected {
+                                                                    ui.painter().rect_stroke(
+                                                                        resp.response.rect,
+                                                                        8.0,
+                                                                        egui::Stroke::new(
+                                                                            2.0,
+                                                                            theme::col().ACCENT,
+                                                                        ),
+                                                                    );
+                                                                } else if click.hovered() {
+                                                                    ui.painter().rect_stroke(
+                                                                resp.response.rect,
+                                                                8.0,
+                                                                egui::Stroke::new(
+                                                                    1.0,
+                                                                    theme::col().PANEL_EDGE,
+                                                                ),
+                                                            );
+                                                                }
+                                                                if click.clicked() {
+                                                                    self.last_id = Some(id);
+                                                                    self.last_element_name =
+                                                                        Some(name);
+                                                                    self.status =
+                                                                        format!("已选中 #{id}");
+                                                                }
+
+                                                                if (n + 1) % cols == 0 {
+                                                                    ui.end_row();
+                                                                }
+                                                            }
+                                                        });
+                                                },
+                                            );
+                                        });
+
+                                        ui.add_space(8.0);
+                                        ui.separator();
+                                        ui.colored_label(theme::col().SUCCESS, &self.status);
+
+                                        match &self.mode {
+                                            AppMode::Normal => {
+                                                theme::toolbar_row(ui, |ui| {
+                                                    if self.last_id.is_some() {
+                                                        if theme::secondary_button(
+                                                            ui,
+                                                            crate::i18n::t("recorder.btn.add_state"),
+                                                        )
+                                                        .clicked()
+                                                            || ui.input(|i| {
+                                                                i.key_pressed(egui::Key::F6)
+                                                            })
+                                                        {
+                                                            self.forced_state_name = None;
+                                                            self.begin_capture(ctx, true);
+                                                        }
+                                                    }
+                                                    if theme::secondary_button(ui, crate::i18n::t("recorder.btn.export"))
+                                                        .clicked()
+                                                    {
+                                                        self.mode = AppMode::InputExport;
+                                                        self.input.clear();
+                                                        self.status = "输入导出文件名:".into();
+                                                    }
+                                                });
+                                                ui.add_space(6.0);
+                                                theme::toolbar_row(ui, |ui| {
+                                                    theme::field_label(ui, crate::i18n::t("recorder.hide_wait"));
+                                                    ui.add_space(8.0);
+                                                    let mut ms = self.hide_wait_ms();
+                                                    ui.allocate_ui_with_layout(
+                                                        egui::vec2(220.0, theme::CTRL_H),
+                                                        egui::Layout::left_to_right(
+                                                            egui::Align::Center,
+                                                        ),
+                                                        |ui| {
+                                                            if ui
+                                                                .add(
+                                                                    egui::Slider::new(
+                                                                        &mut ms,
+                                                                        500..=3000,
+                                                                    )
+                                                                    .step_by(100.0)
+                                                                    .suffix(" ms"),
+                                                                )
+                                                                .changed()
+                                                            {
+                                                                self.set_hide_wait_ms(ms);
+                                                            }
+                                                        },
+                                                    );
+                                                });
+                                                if self.last_id.is_some() {
+                                                    ui.add_space(8.0);
+                                                    theme::field_label(ui, "快捷状态");
+                                                    ui.add_space(4.0);
+                                                    theme::toolbar_row(ui, |ui| {
+                                                        for (key, label, suffix) in [
+                                                            (egui::Key::F1, "F1  常态", "-n"),
+                                                            (egui::Key::F2, "F2  选中", "-s"),
+                                                            (egui::Key::F3, "F3  点击", "-c"),
+                                                            (egui::Key::F4, "F4  点+选", "-cs"),
+                                                        ] {
+                                                            let pressed =
+                                                                ui.input(|i| i.key_pressed(key));
+                                                            if theme::secondary_button(ui, label)
+                                                                .clicked()
+                                                                || pressed
+                                                            {
+                                                                self.forced_state_name =
+                                                                    Some(suffix.to_string());
+                                                                self.begin_capture(ctx, true);
+                                                            }
+                                                        }
+                                                    });
                                                 }
-                                                self.input.clear();
                                             }
-                                            AppMode::InputExport if !val.is_empty() => {
-                                                match export_csv(&self.conn, &val, &self.config) {
-                                                    Ok(p) => {
-                                                        self.status = format!("Exported: {}", p)
-                                                    }
-                                                    Err(e) => {
-                                                        self.status =
-                                                            format!("Export error: {}", e)
-                                                    }
+                                            AppMode::Capturing => {
+                                                ui.colored_label(
+                                                    Color32::RED,
+                                                    "Click and drag on screen to select region",
+                                                );
+                                                if ui.button("Cancel").clicked() {
+                                                    self.end_capture(ctx);
+                                                    self.mode = AppMode::Normal;
+                                                    self.status = "Cancelled".into();
                                                 }
-                                                self.input.clear();
                                             }
                                             _ => {
-                                                self.status = "Cancelled".into();
-                                                self.input.clear();
+                                                let prompt = match &self.mode {
+                                                    AppMode::InputName(..) => "Element name:",
+                                                    AppMode::InputState(..) => {
+                                                        "State name (default: -n):"
+                                                    }
+                                                    AppMode::InputExport => {
+                                                        "Export filename (no extension):"
+                                                    }
+                                                    _ => "",
+                                                };
+                                                ui.label(prompt);
+                                                let resp = ui.text_edit_singleline(&mut self.input);
+                                                ui.horizontal(|ui| {
+                                                    if ui.button("OK").clicked()
+                                                        || (resp.has_focus()
+                                                            && ui.input_mut(|i| {
+                                                                i.key_pressed(egui::Key::Enter)
+                                                            }))
+                                                    {
+                                                        let val = self.input.trim().to_string();
+                                                        let old = std::mem::replace(
+                                                            &mut self.mode,
+                                                            AppMode::Normal,
+                                                        );
+                                                        match old {
+                                                            AppMode::InputName(
+                                                                x1,
+                                                                y1,
+                                                                x2,
+                                                                y2,
+                                                                img,
+                                                            ) if !val.is_empty() => {
+                                                                self.mode = AppMode::InputState(
+                                                                    x1,
+                                                                    y1,
+                                                                    x2,
+                                                                    y2,
+                                                                    img,
+                                                                    val,
+                                                                    "-n".to_string(),
+                                                                );
+                                                                self.input.clear();
+                                                                self.status =
+                                                            "Enter state name (default: -n):"
+                                                                .into();
+                                                            }
+                                                            AppMode::InputState(
+                                                                x1,
+                                                                y1,
+                                                                x2,
+                                                                y2,
+                                                                img,
+                                                                name,
+                                                                default_state,
+                                                            ) => {
+                                                                let state_name = if val.is_empty() {
+                                                                    default_state
+                                                                } else {
+                                                                    val
+                                                                };
+                                                                let new_path =
+                                                                    std::path::Path::new(
+                                                                        &self.image_dir,
+                                                                    )
+                                                                    .join(format!(
+                                                                        "{}_{}.png",
+                                                                        name, state_name
+                                                                    ))
+                                                                    .to_string_lossy()
+                                                                    .to_string();
+                                                                let img_path = if std::fs::rename(
+                                                                    &img, &new_path,
+                                                                )
+                                                                .is_ok()
+                                                                {
+                                                                    new_path
+                                                                } else {
+                                                                    img
+                                                                };
+                                                                match create_elem(
+                                                                    &self.conn,
+                                                                    &name,
+                                                                    &state_name,
+                                                                    x1,
+                                                                    y1,
+                                                                    x2,
+                                                                    y2,
+                                                                    &img_path,
+                                                                    self.sw,
+                                                                    self.sh,
+                                                                ) {
+                                                                    Ok(id) => {
+                                                                        self.last_id = Some(id);
+                                                                        self.last_element_name =
+                                                                            Some(name.clone());
+                                                                        self.last_state_name = Some(
+                                                                            state_name.clone(),
+                                                                        );
+                                                                        self.status = format!(
+                                                                            "Element #{} created!",
+                                                                            id
+                                                                        );
+                                                                        self.refresh();
+                                                                    }
+                                                                    Err(e) => {
+                                                                        self.status =
+                                                                            format!("Error: {}", e)
+                                                                    }
+                                                                }
+                                                                self.input.clear();
+                                                            }
+                                                            AppMode::InputExport
+                                                                if !val.is_empty() =>
+                                                            {
+                                                                match export_csv(
+                                                                    &self.conn,
+                                                                    &val,
+                                                                    &self.config,
+                                                                ) {
+                                                                    Ok(p) => {
+                                                                        self.status = format!(
+                                                                            "Exported: {}",
+                                                                            p
+                                                                        )
+                                                                    }
+                                                                    Err(e) => {
+                                                                        self.status = format!(
+                                                                            "Export error: {}",
+                                                                            e
+                                                                        )
+                                                                    }
+                                                                }
+                                                                self.input.clear();
+                                                            }
+                                                            _ => {
+                                                                self.status = "Cancelled".into();
+                                                                self.input.clear();
+                                                            }
+                                                        }
+                                                    }
+                                                    if ui.button("Cancel").clicked() {
+                                                        self.mode = AppMode::Normal;
+                                                        self.input.clear();
+                                                        self.status = "Cancelled".into();
+                                                    }
+                                                });
                                             }
                                         }
-                                    }
-                                    if ui.button("Cancel").clicked() {
-                                        self.mode = AppMode::Normal;
-                                        self.input.clear();
-                                        self.status = "Cancelled".into();
-                                    }
-                                });
-                            }
-                        }
-                        }); // card_frame
+                                    }); // element content
+                            }); // main column
+                        }); // page columns
                     });
             }
         }

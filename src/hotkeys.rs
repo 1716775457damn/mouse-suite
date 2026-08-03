@@ -65,12 +65,7 @@ fn windows_hotkey_loop(tx: Sender<HotkeyEvent>) {
         let _ = RegisterHotKey(HWND(0), ID_START, mods, VK_F9);
         let _ = RegisterHotKey(HWND(0), ID_STOP, mods, VK_F10);
         // F8 alone for scribe toggle
-        let _ = RegisterHotKey(
-            HWND(0),
-            ID_SCRIBE,
-            HOT_KEY_MODIFIERS(MOD_NOREPEAT.0),
-            VK_F8,
-        );
+        let _ = RegisterHotKey(HWND(0), ID_SCRIBE, HOT_KEY_MODIFIERS(MOD_NOREPEAT.0), VK_F8);
 
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, HWND(0), 0, 0).as_bool() {

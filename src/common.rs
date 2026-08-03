@@ -31,10 +31,24 @@ pub struct Config {
     /// Milliseconds to wait after hiding UI before capturing (500–3000).
     #[serde(default = "default_hide_wait_ms")]
     pub hide_wait_ms: u64,
+    /// UI language: "zh" | "en"
+    #[serde(default = "default_language")]
+    pub language: String,
+    /// UI theme: "light" | "dark"
+    #[serde(default = "default_theme")]
+    pub theme: String,
 }
 
 fn default_hide_wait_ms() -> u64 {
     1500
+}
+
+fn default_language() -> String {
+    "zh".into()
+}
+
+fn default_theme() -> String {
+    "light".into()
 }
 
 impl Config {
@@ -51,9 +65,16 @@ impl Config {
         let mut doc = String::from(
             "# Paths relative to the executable directory, or absolute paths.\n\
              # db_path = \"data/mouse_recorder.db\"\n\
-             # image_dir = \"data\"\n",
+             # image_dir = \"data\"\n\
+             # language = \"zh\" | \"en\"\n\
+             # theme = \"light\" | \"dark\"\n",
         );
-        doc.push_str(&format!("hide_wait_ms = {}\n", self.hide_wait_ms.clamp(500, 3000)));
+        doc.push_str(&format!(
+            "hide_wait_ms = {}\n",
+            self.hide_wait_ms.clamp(500, 3000)
+        ));
+        doc.push_str(&format!("language = \"{}\"\n", self.language));
+        doc.push_str(&format!("theme = \"{}\"\n", self.theme));
         if let Some(ref p) = self.db_path {
             doc.push_str(&format!("db_path = \"{}\"\n", p.replace('\\', "\\\\")));
         }
@@ -102,6 +123,8 @@ impl Default for Config {
             db_path: None,
             image_dir: None,
             hide_wait_ms: 1500,
+            language: default_language(),
+            theme: default_theme(),
         }
     }
 }

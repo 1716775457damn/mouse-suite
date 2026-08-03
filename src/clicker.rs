@@ -1,5 +1,5 @@
 use crate::common::data_dir;
-use crate::theme::{self, colors};
+use crate::theme::{self, col};
 use crate::workflow::{self, ClickFailAction, StepType, WorkflowStep};
 use eframe::egui;
 use image::{ImageBuffer, Rgba};
@@ -20,7 +20,8 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 #[cfg(windows)]
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetSystemMetrics, SetCursorPos, SM_CXSCREEN, SM_CXVIRTUALSCREEN, SM_CYSCREEN, SM_CYVIRTUALSCREEN,
+    GetSystemMetrics, SetCursorPos, SM_CXSCREEN, SM_CXVIRTUALSCREEN, SM_CYSCREEN,
+    SM_CYVIRTUALSCREEN,
 };
 
 #[derive(Serialize, Deserialize)]
@@ -129,7 +130,10 @@ impl ElementDatabase {
         Self { db_path }
     }
 
-    fn load_element(&self, element_name: &str) -> SqlResult<Option<(UIElement, Vec<ElementState>)>> {
+    fn load_element(
+        &self,
+        element_name: &str,
+    ) -> SqlResult<Option<(UIElement, Vec<ElementState>)>> {
         let conn = Connection::open(&self.db_path)?;
 
         let (base_name, state_suffix) = if let Some(pos) = element_name.rfind("_-") {
@@ -227,7 +231,9 @@ enum AppMode {
 
 #[derive(Clone, Debug)]
 enum DialogKind {
-    Pause { message: String },
+    Pause {
+        message: String,
+    },
     Manual {
         message: String,
         instruction: Option<String>,
@@ -272,8 +278,7 @@ impl ClickerApp {
         } else {
             default_element_folder
         };
-        let on_fail =
-            ClickFailAction::parse(&config.on_fail).unwrap_or(ClickFailAction::Skip);
+        let on_fail = ClickFailAction::parse(&config.on_fail).unwrap_or(ClickFailAction::Skip);
         Self {
             mode: AppMode::CsvMode,
             csv_path: String::new(),
@@ -529,7 +534,7 @@ impl ClickerApp {
                             14.0,
                             egui::Color32::from_black_alpha(40),
                         );
-                        painter.rect_filled(full.shrink(1.0), 14.0, colors::HUD_BG);
+                        painter.rect_filled(full.shrink(1.0), 14.0, col().HUD_BG);
                         painter.rect_stroke(
                             full.shrink(1.0),
                             14.0,
@@ -540,7 +545,7 @@ impl ClickerApp {
                             egui::pos2(full.left() + 14.0, full.top() + 4.0),
                             egui::pos2(full.right() - 14.0, full.top() + 6.0),
                         );
-                        painter.rect_filled(rail, 1.0, colors::ACCENT);
+                        painter.rect_filled(rail, 1.0, col().ACCENT);
 
                         // Progress strip
                         let strip = egui::Rect::from_min_max(
@@ -550,7 +555,7 @@ impl ClickerApp {
                         painter.rect_filled(strip, 2.0, egui::Color32::from_rgb(58, 58, 60));
                         let mut filled = strip;
                         filled.set_width((strip.width() * progress).max(4.0));
-                        painter.rect_filled(filled, 2.0, colors::ACCENT_HOT);
+                        painter.rect_filled(filled, 2.0, col().ACCENT_HOT);
 
                         let inner = egui::Rect::from_min_max(
                             egui::pos2(full.left() + 14.0, full.top() + 8.0),
@@ -560,15 +565,17 @@ impl ClickerApp {
                             ui.horizontal(|ui| {
                                 // Pulse dot
                                 let dot_c = match state {
-                                    AppState::Paused => colors::WARN,
+                                    AppState::Paused => col().WARN,
                                     _ => egui::Color32::from_rgb(
                                         (0.0 + 40.0 * pulse) as u8,
                                         (122.0 + 40.0 * pulse) as u8,
                                         (255.0 - 20.0 * pulse) as u8,
                                     ),
                                 };
-                                let (dot_rect, _) =
-                                    ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+                                let (dot_rect, _) = ui.allocate_exact_size(
+                                    egui::vec2(10.0, 10.0),
+                                    egui::Sense::hover(),
+                                );
                                 ui.painter().circle_filled(dot_rect.center(), 4.5, dot_c);
 
                                 ui.add_space(6.0);
@@ -598,7 +605,7 @@ impl ClickerApp {
                                     egui::RichText::new(format!("{}/{}", step_num, total))
                                         .size(13.0)
                                         .strong()
-                                        .color(colors::ACCENT_DIM),
+                                        .color(col().ACCENT_DIM),
                                 );
                                 if let Some((cur, tot)) = loop_prog {
                                     ui.add_space(4.0);
@@ -606,7 +613,7 @@ impl ClickerApp {
                                         egui::RichText::new(format!("循环{}/{}", cur, tot))
                                             .size(12.0)
                                             .strong()
-                                            .color(colors::WARN),
+                                            .color(col().WARN),
                                     );
                                 }
                                 ui.add_space(6.0);
@@ -620,11 +627,11 @@ impl ClickerApp {
                                     egui::Layout::right_to_left(egui::Align::Center),
                                     |ui| {
                                         let stop_btn = egui::Button::new(
-                                            egui::RichText::new("停止")
+                                            egui::RichText::new(crate::i18n::t("clicker.btn.stop"))
                                                 .size(12.0)
                                                 .color(egui::Color32::WHITE),
                                         )
-                                        .fill(colors::DANGER)
+                                        .fill(col().DANGER)
                                         .rounding(6.0);
                                         if ui.add(stop_btn).clicked() {
                                             stop = true;
@@ -636,7 +643,7 @@ impl ClickerApp {
                                                     .size(12.0)
                                                     .color(egui::Color32::WHITE),
                                             )
-                                            .fill(colors::ACCENT)
+                                            .fill(col().ACCENT)
                                             .rounding(6.0);
                                             if ui.add(go).clicked() {
                                                 cont = true;
@@ -819,30 +826,34 @@ impl ClickerApp {
                     remaining: u32,
                     total: u32,
                 },
-                While { head_pc: usize, max_times: u32 },
+                While {
+                    head_pc: usize,
+                    max_times: u32,
+                },
             }
             let mut loop_stack: Vec<LoopFrame> = Vec::new();
             // While-loop iteration counts keyed by LoopWhileStart PC
             let mut while_iters: std::collections::HashMap<usize, u32> =
                 std::collections::HashMap::new();
-            let sync_loop_hud = |stack: &[LoopFrame],
-                                 while_iters: &std::collections::HashMap<usize, u32>,
-                                 loop_progress: &Arc<Mutex<Option<(u32, u32)>>>| {
-                let prog = match stack.last() {
-                    Some(LoopFrame::Count {
-                        remaining, total, ..
-                    }) => {
-                        let current = total.saturating_sub(*remaining).saturating_add(1);
-                        Some((current.min(*total), *total))
-                    }
-                    Some(LoopFrame::While { head_pc, max_times }) => {
-                        let cur = while_iters.get(head_pc).copied().unwrap_or(0).max(1);
-                        Some((cur.min(*max_times), *max_times))
-                    }
-                    None => None,
+            let sync_loop_hud =
+                |stack: &[LoopFrame],
+                 while_iters: &std::collections::HashMap<usize, u32>,
+                 loop_progress: &Arc<Mutex<Option<(u32, u32)>>>| {
+                    let prog = match stack.last() {
+                        Some(LoopFrame::Count {
+                            remaining, total, ..
+                        }) => {
+                            let current = total.saturating_sub(*remaining).saturating_add(1);
+                            Some((current.min(*total), *total))
+                        }
+                        Some(LoopFrame::While { head_pc, max_times }) => {
+                            let cur = while_iters.get(head_pc).copied().unwrap_or(0).max(1);
+                            Some((cur.min(*max_times), *max_times))
+                        }
+                        None => None,
+                    };
+                    *loop_progress.lock().unwrap() = prog;
                 };
-                *loop_progress.lock().unwrap() = prog;
-            };
 
             while pc < steps.len() {
                 {
@@ -1007,65 +1018,63 @@ impl ClickerApp {
                             }
                         }
                     }
-                    StepType::LoopEnd => {
-                        match loop_stack.pop() {
-                            Some(LoopFrame::Count {
-                                body_start,
-                                remaining,
-                                total,
-                            }) => {
-                                if remaining > 1 {
-                                    loop_stack.push(LoopFrame::Count {
-                                        body_start,
-                                        remaining: remaining - 1,
-                                        total,
-                                    });
-                                    sync_loop_hud(&loop_stack, &while_iters, &loop_progress);
-                                    log_write(
-                                        &log,
-                                        &log_file,
-                                        format!(
-                                            "Step {}: Loop end → repeat ({}/{}, {} left)",
-                                            i + 1,
-                                            total - remaining + 2,
-                                            total,
-                                            remaining - 1
-                                        ),
-                                    );
-                                    pc = body_start;
-                                } else {
-                                    sync_loop_hud(&loop_stack, &while_iters, &loop_progress);
-                                    log_write(
-                                        &log,
-                                        &log_file,
-                                        format!("Step {}: Loop finished ({}/{})", i + 1, total, total),
-                                    );
-                                    pc += 1;
-                                }
-                            }
-                            Some(LoopFrame::While { head_pc, .. }) => {
+                    StepType::LoopEnd => match loop_stack.pop() {
+                        Some(LoopFrame::Count {
+                            body_start,
+                            remaining,
+                            total,
+                        }) => {
+                            if remaining > 1 {
+                                loop_stack.push(LoopFrame::Count {
+                                    body_start,
+                                    remaining: remaining - 1,
+                                    total,
+                                });
                                 sync_loop_hud(&loop_stack, &while_iters, &loop_progress);
                                 log_write(
                                     &log,
                                     &log_file,
                                     format!(
-                                        "Step {}: Loop end → recheck while at {}",
+                                        "Step {}: Loop end → repeat ({}/{}, {} left)",
                                         i + 1,
-                                        head_pc + 1
+                                        total - remaining + 2,
+                                        total,
+                                        remaining - 1
                                     ),
                                 );
-                                pc = head_pc;
-                            }
-                            None => {
+                                pc = body_start;
+                            } else {
+                                sync_loop_hud(&loop_stack, &while_iters, &loop_progress);
                                 log_write(
                                     &log,
                                     &log_file,
-                                    format!("Step {}: Loop end without start (ignored)", i + 1),
+                                    format!("Step {}: Loop finished ({}/{})", i + 1, total, total),
                                 );
                                 pc += 1;
                             }
                         }
-                    }
+                        Some(LoopFrame::While { head_pc, .. }) => {
+                            sync_loop_hud(&loop_stack, &while_iters, &loop_progress);
+                            log_write(
+                                &log,
+                                &log_file,
+                                format!(
+                                    "Step {}: Loop end → recheck while at {}",
+                                    i + 1,
+                                    head_pc + 1
+                                ),
+                            );
+                            pc = head_pc;
+                        }
+                        None => {
+                            log_write(
+                                &log,
+                                &log_file,
+                                format!("Step {}: Loop end without start (ignored)", i + 1),
+                            );
+                            pc += 1;
+                        }
+                    },
                     StepType::Click {
                         element_name,
                         or_elements,
@@ -1128,7 +1137,7 @@ impl ClickerApp {
                             &log,
                             &log_file,
                             format!(
-                                "Step {}: Type \"{}\"{}" ,
+                                "Step {}: Type \"{}\"{}",
                                 i + 1,
                                 preview,
                                 if text.chars().count() > 40 { "…" } else { "" }
@@ -1158,11 +1167,7 @@ impl ClickerApp {
 
                         *dialog_pending.lock().unwrap() = None;
                         if *state.lock().unwrap() != AppState::Paused {
-                            log_write(
-                                &log,
-                                &log_file,
-                                format!("Step {}: Stopped by user", i + 1),
-                            );
+                            log_write(&log, &log_file, format!("Step {}: Stopped by user", i + 1));
                             *loop_progress.lock().unwrap() = None;
                             *window_visible.lock().unwrap() = true;
                             ctx_clone.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
@@ -1198,22 +1203,14 @@ impl ClickerApp {
 
                         *dialog_pending.lock().unwrap() = None;
                         if *state.lock().unwrap() != AppState::Paused {
-                            log_write(
-                                &log,
-                                &log_file,
-                                format!("Step {}: Stopped by user", i + 1),
-                            );
+                            log_write(&log, &log_file, format!("Step {}: Stopped by user", i + 1));
                             *loop_progress.lock().unwrap() = None;
                             *window_visible.lock().unwrap() = true;
                             ctx_clone.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
                             return;
                         }
                         *state.lock().unwrap() = AppState::Running;
-                        log_write(
-                            &log,
-                            &log_file,
-                            format!("Step {}: Manual done", i + 1),
-                        );
+                        log_write(&log, &log_file, format!("Step {}: Manual done", i + 1));
                         pc += 1;
                     }
                 }
@@ -1264,10 +1261,7 @@ impl ClickerApp {
                     if let (Some(orig_w), Some(orig_h)) = (p.original_width, p.original_height) {
                         let scale_x = current_w as f64 / orig_w as f64;
                         let scale_y = current_h as f64 / orig_h as f64;
-                        (
-                            (p.x as f64 * scale_x) as i32,
-                            (p.y as f64 * scale_y) as i32,
-                        )
+                        ((p.x as f64 * scale_x) as i32, (p.y as f64 * scale_y) as i32)
                     } else {
                         (p.x, p.y)
                     };
@@ -1305,13 +1299,13 @@ impl ClickerApp {
                     ));
                     None
                 } else {
-                    let res_info =
-                        if let (Some(orig_w), Some(orig_h)) = (p.original_width, p.original_height)
-                        {
-                            format!(" [scaled from {}x{}]", orig_w, orig_h)
-                        } else {
-                            String::new()
-                        };
+                    let res_info = if let (Some(orig_w), Some(orig_h)) =
+                        (p.original_width, p.original_height)
+                    {
+                        format!(" [scaled from {}x{}]", orig_w, orig_h)
+                    } else {
+                        String::new()
+                    };
                     log.lock().unwrap().push(format!(
                         "#{:03} [Coords] ({}, {}){}  - {}",
                         p.id, scaled_x, scaled_y, res_info, p.description
@@ -1328,7 +1322,9 @@ impl ClickerApp {
             *state.lock().unwrap() = AppState::Done;
             *window_visible.lock().unwrap() = true;
             ctx_clone.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
-            log.lock().unwrap().push("All clicks completed!".to_string());
+            log.lock()
+                .unwrap()
+                .push("All clicks completed!".to_string());
         });
     }
 
@@ -1416,62 +1412,70 @@ impl ClickerApp {
         }
 
         egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(colors::BG))
+            .frame(egui::Frame::none().fill(col().BG))
             .show(ctx, |ui| {
                 theme::paint_atmosphere(ui);
-                theme::card_frame().show(ui, |ui| {
-                    theme::section_header(ui, "自动点击", "CSV 坐标序列或工作流文件回放");
+                egui::Frame::none()
+                    .inner_margin(egui::Margin::symmetric(20.0, 18.0))
+                    .show(ui, |ui| {
+                        theme::section_header(ui, crate::i18n::t("clicker.header.title"), crate::i18n::t("clicker.header.subtitle"));
 
-                    theme::toolbar_row(ui, |ui| {
-                        theme::field_label(ui, "模式");
-                        ui.add_space(8.0);
-                        ui.selectable_value(&mut self.mode, AppMode::CsvMode, "CSV");
-                        ui.selectable_value(&mut self.mode, AppMode::WorkflowMode, "工作流文件");
-                    });
-
-                    ui.add_space(10.0);
-                    theme::hairline(ui);
-
-                    if self.mode == AppMode::CsvMode {
-                        self.render_csv_mode(ui, ctx);
-                    } else {
-                        self.render_workflow_mode(ui, ctx);
-                    }
-
-                    ui.add_space(8.0);
-
-                    let logs = self.log_messages.lock().unwrap();
-                    if !logs.is_empty() {
-                        ui.label(
-                            egui::RichText::new("运行日志")
-                                .size(12.0)
-                                .strong()
-                                .color(colors::MUTED),
-                        );
-                        theme::inset_frame().show(ui, |ui| {
-                            egui::ScrollArea::vertical()
-                                .max_height(140.0)
-                                .stick_to_bottom(true)
-                                .show(ui, |ui| {
-                                    for msg in logs.iter() {
-                                        ui.label(
-                                            egui::RichText::new(msg).size(11.5).color(colors::TEXT),
-                                        );
-                                    }
-                                });
+                        theme::toolbar_row(ui, |ui| {
+                            theme::field_label(ui, crate::i18n::t("clicker.mode"));
+                            ui.add_space(8.0);
+                            ui.selectable_value(&mut self.mode, AppMode::CsvMode, "CSV");
+                            ui.selectable_value(
+                                &mut self.mode,
+                                AppMode::WorkflowMode,
+                                crate::i18n::t("clicker.mode.workflow"),
+                            );
                         });
-                    }
-                });
+
+                        ui.add_space(10.0);
+                        theme::hairline(ui);
+
+                        if self.mode == AppMode::CsvMode {
+                            self.render_csv_mode(ui, ctx);
+                        } else {
+                            self.render_workflow_mode(ui, ctx);
+                        }
+
+                        ui.add_space(8.0);
+
+                        let logs = self.log_messages.lock().unwrap();
+                        if !logs.is_empty() {
+                            ui.label(
+                                egui::RichText::new(crate::i18n::t("clicker.log"))
+                                    .size(12.0)
+                                    .strong()
+                                    .color(col().MUTED),
+                            );
+                            theme::inset_frame().show(ui, |ui| {
+                                egui::ScrollArea::vertical()
+                                    .max_height(140.0)
+                                    .stick_to_bottom(true)
+                                    .show(ui, |ui| {
+                                        for msg in logs.iter() {
+                                            ui.label(
+                                                egui::RichText::new(msg)
+                                                    .size(11.5)
+                                                    .color(col().TEXT),
+                                            );
+                                        }
+                                    });
+                            });
+                        }
+                    });
             });
     }
 
     fn render_csv_mode(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         theme::toolbar_row(ui, |ui| {
-            theme::field_label(ui, "CSV 文件");
+            theme::field_label(ui, crate::i18n::t("clicker.field.csv"));
             ui.add_space(8.0);
             let path_w = (ui.available_width() - 180.0).max(120.0);
             ui.add(egui::TextEdit::singleline(&mut self.csv_path).desired_width(path_w));
-            if theme::secondary_button(ui, "浏览").clicked() {
+            if theme::secondary_button(ui, crate::i18n::t("clicker.btn.browse")).clicked() {
                 if let Some(path) = rfd::FileDialog::new()
                     .add_filter("CSV", &["csv"])
                     .set_directory("D:\\")
@@ -1481,7 +1485,7 @@ impl ClickerApp {
                     self.load_csv(&p);
                 }
             }
-            if theme::secondary_button(ui, "加载").clicked() && !self.csv_path.is_empty() {
+            if theme::secondary_button(ui, crate::i18n::t("clicker.btn.load")).clicked() && !self.csv_path.is_empty() {
                 let p = self.csv_path.clone();
                 self.load_csv(&p);
             }
@@ -1490,16 +1494,16 @@ impl ClickerApp {
         ui.add_space(8.0);
 
         theme::toolbar_row(ui, |ui| {
-            theme::field_label(ui, "点击间隔");
+            theme::field_label(ui, crate::i18n::t("clicker.field.interval"));
             ui.add_space(8.0);
             ui.add(
                 egui::TextEdit::singleline(&mut self.delay_ms)
                     .desired_width(72.0)
                     .hint_text("ms"),
             );
-            ui.label(egui::RichText::new("ms").size(12.0).color(colors::MUTED));
+            ui.label(egui::RichText::new("ms").size(12.0).color(col().MUTED));
             ui.add_space(16.0);
-            theme::field_label(ui, "视觉阈值");
+            theme::field_label(ui, crate::i18n::t("clicker.field.threshold"));
             ui.add_space(8.0);
             let mut thr = self.match_threshold;
             ui.allocate_ui_with_layout(
@@ -1515,7 +1519,7 @@ impl ClickerApp {
                 },
             );
             let mut pv = self.pure_vision;
-            if ui.checkbox(&mut pv, "纯视觉").changed() {
+            if ui.checkbox(&mut pv, crate::i18n::t("clicker.pure_vision")).changed() {
                 self.set_pure_vision(pv);
             }
         });
@@ -1553,11 +1557,13 @@ impl ClickerApp {
                                     prefix, p.id, p.x, p.y, template_indicator, p.description
                                 ))
                                 .size(12.5)
-                                .color(if state == AppState::Running && i == current {
-                                    colors::ACCENT
-                                } else {
-                                    colors::TEXT
-                                }),
+                                .color(
+                                    if state == AppState::Running && i == current {
+                                        col().ACCENT
+                                    } else {
+                                        col().TEXT
+                                    },
+                                ),
                             );
                         }
                     });
@@ -1568,72 +1574,67 @@ impl ClickerApp {
         theme::hairline(ui);
 
         let state = self.state.lock().unwrap().clone();
-        theme::toolbar_row(ui, |ui| {
-            match state {
-                AppState::Idle => {
-                    let can_start = !self.points.is_empty();
-                    if ui
-                        .add_enabled(
-                            can_start,
-                            egui::Button::new(
-                                egui::RichText::new("开始（3 秒倒计时）")
-                                    .color(egui::Color32::WHITE)
-                                    .strong(),
-                            )
-                            .fill(colors::ACCENT)
-                            .min_size(egui::vec2(0.0, theme::CTRL_H)),
+        theme::toolbar_row(ui, |ui| match state {
+            AppState::Idle => {
+                let can_start = !self.points.is_empty();
+                if ui
+                    .add_enabled(
+                        can_start,
+                        egui::Button::new(
+                            egui::RichText::new(crate::i18n::t("clicker.btn.start"))
+                                .color(egui::Color32::WHITE)
+                                .strong(),
                         )
-                        .clicked()
-                    {
-                        self.start_clicking(ctx);
-                    }
+                        .fill(col().ACCENT)
+                        .min_size(egui::vec2(0.0, theme::CTRL_H)),
+                    )
+                    .clicked()
+                {
+                    self.start_clicking(ctx);
                 }
-                AppState::Running => {
-                    if theme::danger_button(ui, "停止").clicked() {
-                        *self.state.lock().unwrap() = AppState::Idle;
-                        *self.window_visible.lock().unwrap() = true;
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
-                    }
-                    ui.label(
-                        egui::RichText::new("运行中…")
-                            .size(12.0)
-                            .color(colors::MUTED),
-                    );
+            }
+            AppState::Running => {
+                if theme::danger_button(ui, crate::i18n::t("clicker.btn.stop")).clicked() {
+                    *self.state.lock().unwrap() = AppState::Idle;
+                    *self.window_visible.lock().unwrap() = true;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
                 }
-                AppState::Done => {
-                    if theme::secondary_button(ui, "重置").clicked() {
-                        *self.state.lock().unwrap() = AppState::Idle;
-                        self.log_messages.lock().unwrap().clear();
-                        *self.current_index.lock().unwrap() = 0;
-                    }
-                    ui.label(
-                        egui::RichText::new("已完成")
-                            .size(12.0)
-                            .color(colors::SUCCESS),
-                    );
+                ui.label(
+                    egui::RichText::new("运行中…")
+                        .size(12.0)
+                        .color(col().MUTED),
+                );
+            }
+            AppState::Done => {
+                if theme::secondary_button(ui, crate::i18n::t("clicker.btn.reset")).clicked() {
+                    *self.state.lock().unwrap() = AppState::Idle;
+                    self.log_messages.lock().unwrap().clear();
+                    *self.current_index.lock().unwrap() = 0;
                 }
-                AppState::Paused => {
-                    ui.label(
-                        egui::RichText::new("已暂停 — 等待确认…")
-                            .size(12.0)
-                            .color(colors::WARN),
-                    );
-                }
+                ui.label(
+                    egui::RichText::new("已完成")
+                        .size(12.0)
+                        .color(col().SUCCESS),
+                );
+            }
+            AppState::Paused => {
+                ui.label(
+                    egui::RichText::new("已暂停 — 等待确认…")
+                        .size(12.0)
+                        .color(col().WARN),
+                );
             }
         });
     }
 
     fn render_workflow_mode(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         theme::toolbar_row(ui, |ui| {
-            theme::field_label(ui, "元素目录");
+            theme::field_label(ui, crate::i18n::t("clicker.field.element_dir"));
             ui.add_space(8.0);
             let path_w = (ui.available_width() - 100.0).max(120.0);
             ui.add(egui::TextEdit::singleline(&mut self.element_folder).desired_width(path_w));
-            if theme::secondary_button(ui, "浏览").clicked() {
-                if let Some(path) = rfd::FileDialog::new()
-                    .set_directory("D:\\")
-                    .pick_folder()
-                {
+            if theme::secondary_button(ui, crate::i18n::t("clicker.btn.browse")).clicked() {
+                if let Some(path) = rfd::FileDialog::new().set_directory("D:\\").pick_folder() {
                     self.element_folder = path.to_string_lossy().to_string();
                     self.persist_config();
                 }
@@ -1643,11 +1644,11 @@ impl ClickerApp {
         ui.add_space(8.0);
 
         theme::toolbar_row(ui, |ui| {
-            theme::field_label(ui, "工作流");
+            theme::field_label(ui, crate::i18n::t("clicker.field.workflow"));
             ui.add_space(8.0);
             let path_w = (ui.available_width() - 180.0).max(120.0);
             ui.add(egui::TextEdit::singleline(&mut self.workflow_path).desired_width(path_w));
-            if theme::secondary_button(ui, "浏览").clicked() {
+            if theme::secondary_button(ui, crate::i18n::t("clicker.btn.browse")).clicked() {
                 if let Some(path) = rfd::FileDialog::new()
                     .add_filter("Workflow", &["txt"])
                     .set_directory("D:\\")
@@ -1658,7 +1659,7 @@ impl ClickerApp {
                     self.persist_config();
                 }
             }
-            if theme::secondary_button(ui, "加载").clicked() && !self.workflow_path.is_empty() {
+            if theme::secondary_button(ui, crate::i18n::t("clicker.btn.load")).clicked() && !self.workflow_path.is_empty() {
                 let p = self.workflow_path.clone();
                 self.load_workflow(&p);
                 self.persist_config();
@@ -1675,9 +1676,9 @@ impl ClickerApp {
                     .desired_width(72.0)
                     .hint_text("ms"),
             );
-            ui.label(egui::RichText::new("ms").size(12.0).color(colors::MUTED));
+            ui.label(egui::RichText::new("ms").size(12.0).color(col().MUTED));
             ui.add_space(16.0);
-            theme::field_label(ui, "视觉阈值");
+            theme::field_label(ui, crate::i18n::t("clicker.field.threshold"));
             ui.add_space(8.0);
             let mut thr = self.match_threshold;
             ui.allocate_ui_with_layout(
@@ -1695,15 +1696,12 @@ impl ClickerApp {
         });
 
         ui.add_space(6.0);
-        egui::CollapsingHeader::new("高级选项")
+        egui::CollapsingHeader::new(crate::i18n::t("clicker.advanced"))
             .default_open(false)
             .show(ui, |ui| {
                 theme::toolbar_row(ui, |ui| {
                     let mut pv = self.pure_vision;
-                    if ui
-                        .checkbox(&mut pv, "纯视觉（仅匹配成功才点击）")
-                        .changed()
-                    {
+                    if ui.checkbox(&mut pv, "纯视觉（仅匹配成功才点击）").changed() {
                         self.set_pure_vision(pv);
                     }
                     let mut dbg = self.save_match_debug;
@@ -1720,7 +1718,7 @@ impl ClickerApp {
                     if ui.add(egui::DragValue::new(&mut r).range(0..=20)).changed() {
                         self.set_retries(r);
                     }
-                    ui.label(egui::RichText::new("次").size(12.0).color(colors::MUTED));
+                    ui.label(egui::RichText::new("次").size(12.0).color(col().MUTED));
                     ui.add_space(12.0);
                     theme::field_label(ui, "间隔");
                     ui.add_space(8.0);
@@ -1759,100 +1757,107 @@ impl ClickerApp {
         theme::hairline(ui);
 
         if !self.workflow_steps.is_empty() {
-            theme::field_label(ui, &format!("工作流步骤 · {} 步", self.workflow_steps.len()));
+            theme::field_label(
+                ui,
+                &format!("工作流步骤 · {} 步", self.workflow_steps.len()),
+            );
             ui.add_space(4.0);
 
             let current = *self.current_index.lock().unwrap();
             let state = self.state.lock().unwrap().clone();
 
             theme::inset_frame().show(ui, |ui| {
-            egui::ScrollArea::vertical()
-                .max_height(200.0)
-                .show(ui, |ui| {
-                    for (i, step) in self.workflow_steps.iter().enumerate() {
-                        let prefix = if state == AppState::Running && i == current {
-                            "▶ "
-                        } else if step.executed {
-                            "✓ "
-                        } else {
-                            "  "
-                        };
+                egui::ScrollArea::vertical()
+                    .max_height(200.0)
+                    .show(ui, |ui| {
+                        for (i, step) in self.workflow_steps.iter().enumerate() {
+                            let prefix = if state == AppState::Running && i == current {
+                                "▶ "
+                            } else if step.executed {
+                                "✓ "
+                            } else {
+                                "  "
+                            };
 
-                        let step_desc = match &step.step_type {
-                            StepType::Click {
-                                element_name,
-                                or_elements,
-                                threshold,
-                                pure_vision,
-                                retries,
-                                retry_ms: _,
-                                on_fail,
-                            } => {
-                                let names = workflow::merge_or_names(element_name, or_elements);
-                                let mut desc = format!("点击: {}", names.join(" 或 "));
-                                if let Some(t) = threshold {
-                                    desc.push_str(&format!(" thr={:.2}", t));
-                                }
-                                if pure_vision == &Some(true) {
-                                    desc.push_str(" [纯视觉]");
-                                }
-                                if let Some(r) = retries {
-                                    if *r > 0 {
-                                        desc.push_str(&format!(" 重试={}", r));
+                            let step_desc = match &step.step_type {
+                                StepType::Click {
+                                    element_name,
+                                    or_elements,
+                                    threshold,
+                                    pure_vision,
+                                    retries,
+                                    retry_ms: _,
+                                    on_fail,
+                                } => {
+                                    let names = workflow::merge_or_names(element_name, or_elements);
+                                    let mut desc = format!("点击: {}", names.join(" 或 "));
+                                    if let Some(t) = threshold {
+                                        desc.push_str(&format!(" thr={:.2}", t));
                                     }
+                                    if pure_vision == &Some(true) {
+                                        desc.push_str(" [纯视觉]");
+                                    }
+                                    if let Some(r) = retries {
+                                        if *r > 0 {
+                                            desc.push_str(&format!(" 重试={}", r));
+                                        }
+                                    }
+                                    if on_fail == &Some(ClickFailAction::Abort) {
+                                        desc.push_str(" [中止]");
+                                    }
+                                    desc
                                 }
-                                if on_fail == &Some(ClickFailAction::Abort) {
-                                    desc.push_str(" [中止]");
+                                StepType::Pause { message, .. } => format!("暂停: {}", message),
+                                StepType::Manual { message, .. } => format!("人工: {}", message),
+                                StepType::Wait { seconds } => format!("等待: {}s", seconds),
+                                StepType::TypeText { text, .. } => {
+                                    let p: String = text.chars().take(24).collect();
+                                    format!(
+                                        "输入: {}{}",
+                                        p,
+                                        if text.chars().count() > 24 { "…" } else { "" }
+                                    )
                                 }
-                                desc
-                            }
-                            StepType::Pause { message, .. } => format!("暂停: {}", message),
-                            StepType::Manual { message, .. } => format!("人工: {}", message),
-                            StepType::Wait { seconds } => format!("等待: {}s", seconds),
-                            StepType::TypeText { text, .. } => {
-                                let p: String = text.chars().take(24).collect();
-                                format!("输入: {}{}", p, if text.chars().count() > 24 { "…" } else { "" })
-                            }
-                            StepType::LoopStart { times } => format!("循环 ×{}", times),
-                            StepType::LoopWhileStart {
-                                element_name,
-                                or_elements,
-                                max_times,
-                                ..
-                            } => {
-                                let names = workflow::merge_or_names(element_name, or_elements);
-                                format!("条件循环 '{}' ≤{}", names.join(" 或 "), max_times)
-                            }
-                            StepType::LoopEnd => "循环结束".into(),
-                            StepType::IfVision {
-                                element_name,
-                                or_elements,
-                                then_jump,
-                                else_jump,
-                                ..
-                            } => {
-                                let names = workflow::merge_or_names(element_name, or_elements);
-                                format!(
-                                    "视觉条件 '{}' →{}|{}",
-                                    names.join(" 或 "),
-                                    then_jump + 1,
-                                    else_jump + 1
-                                )
-                            }
-                            StepType::Goto { jump } => format!("跳转 →{}", jump + 1),
-                        };
+                                StepType::LoopStart { times } => format!("循环 ×{}", times),
+                                StepType::LoopWhileStart {
+                                    element_name,
+                                    or_elements,
+                                    max_times,
+                                    ..
+                                } => {
+                                    let names = workflow::merge_or_names(element_name, or_elements);
+                                    format!("条件循环 '{}' ≤{}", names.join(" 或 "), max_times)
+                                }
+                                StepType::LoopEnd => "循环结束".into(),
+                                StepType::IfVision {
+                                    element_name,
+                                    or_elements,
+                                    then_jump,
+                                    else_jump,
+                                    ..
+                                } => {
+                                    let names = workflow::merge_or_names(element_name, or_elements);
+                                    format!(
+                                        "视觉条件 '{}' →{}|{}",
+                                        names.join(" 或 "),
+                                        then_jump + 1,
+                                        else_jump + 1
+                                    )
+                                }
+                                StepType::Goto { jump } => format!("跳转 →{}", jump + 1),
+                            };
 
-                        ui.label(
-                            egui::RichText::new(format!("{}{}. {}", prefix, i + 1, step_desc))
-                                .size(12.5)
-                                .color(if state == AppState::Running && i == current {
-                                    colors::ACCENT
-                                } else {
-                                    colors::TEXT
-                                }),
-                        );
-                    }
-                });
+                            ui.label(
+                                egui::RichText::new(format!("{}{}. {}", prefix, i + 1, step_desc))
+                                    .size(12.5)
+                                    .color(if state == AppState::Running && i == current {
+                                        col().ACCENT
+                                    } else {
+                                        col().TEXT
+                                    }),
+                            );
+                        }
+                    });
             });
         }
 
@@ -1860,68 +1865,65 @@ impl ClickerApp {
         theme::hairline(ui);
 
         let state = self.state.lock().unwrap().clone();
-        theme::toolbar_row(ui, |ui| {
-            match state {
-                AppState::Idle => {
-                    let can_start =
-                        !self.workflow_steps.is_empty() && !self.element_folder.is_empty();
-                    if ui
-                        .add_enabled(
-                            can_start,
-                            egui::Button::new(
-                                egui::RichText::new("开始工作流（3 秒倒计时）")
-                                    .color(egui::Color32::WHITE)
-                                    .strong(),
-                            )
-                            .fill(colors::ACCENT)
-                            .min_size(egui::vec2(0.0, theme::CTRL_H)),
+        theme::toolbar_row(ui, |ui| match state {
+            AppState::Idle => {
+                let can_start = !self.workflow_steps.is_empty() && !self.element_folder.is_empty();
+                if ui
+                    .add_enabled(
+                        can_start,
+                        egui::Button::new(
+                            egui::RichText::new(crate::i18n::t("clicker.btn.start_wf"))
+                                .color(egui::Color32::WHITE)
+                                .strong(),
                         )
-                        .clicked()
-                    {
-                        self.start_workflow(ctx);
-                    }
-                    if !self.workflow_steps.is_empty() && self.element_folder.is_empty() {
-                        ui.label(
-                            egui::RichText::new("请先选择元素目录")
-                                .size(12.0)
-                                .color(colors::WARN),
-                        );
-                    }
+                        .fill(col().ACCENT)
+                        .min_size(egui::vec2(0.0, theme::CTRL_H)),
+                    )
+                    .clicked()
+                {
+                    self.start_workflow(ctx);
                 }
-                AppState::Running => {
-                    if theme::danger_button(ui, "停止").clicked() {
-                        *self.state.lock().unwrap() = AppState::Idle;
-                        *self.window_visible.lock().unwrap() = true;
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
-                    }
+                if !self.workflow_steps.is_empty() && self.element_folder.is_empty() {
                     ui.label(
-                        egui::RichText::new("运行中…")
+                        egui::RichText::new("请先选择元素目录")
                             .size(12.0)
-                            .color(colors::MUTED),
+                            .color(col().WARN),
                     );
                 }
-                AppState::Paused => {
-                    ui.label(
-                        egui::RichText::new("已暂停 — 等待确认")
-                            .size(12.0)
-                            .color(colors::WARN),
-                    );
+            }
+            AppState::Running => {
+                if theme::danger_button(ui, crate::i18n::t("clicker.btn.stop")).clicked() {
+                    *self.state.lock().unwrap() = AppState::Idle;
+                    *self.window_visible.lock().unwrap() = true;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
                 }
-                AppState::Done => {
-                    if theme::secondary_button(ui, "重置").clicked() {
-                        *self.state.lock().unwrap() = AppState::Idle;
-                        self.log_messages.lock().unwrap().clear();
-                        *self.current_index.lock().unwrap() = 0;
-                        for step in &mut self.workflow_steps {
-                            step.executed = false;
-                        }
+                ui.label(
+                    egui::RichText::new("运行中…")
+                        .size(12.0)
+                        .color(col().MUTED),
+                );
+            }
+            AppState::Paused => {
+                ui.label(
+                    egui::RichText::new("已暂停 — 等待确认")
+                        .size(12.0)
+                        .color(col().WARN),
+                );
+            }
+            AppState::Done => {
+                if theme::secondary_button(ui, crate::i18n::t("clicker.btn.reset")).clicked() {
+                    *self.state.lock().unwrap() = AppState::Idle;
+                    self.log_messages.lock().unwrap().clear();
+                    *self.current_index.lock().unwrap() = 0;
+                    for step in &mut self.workflow_steps {
+                        step.executed = false;
                     }
-                    ui.label(
-                        egui::RichText::new("工作流已完成")
-                            .size(12.0)
-                            .color(colors::SUCCESS),
-                    );
                 }
+                ui.label(
+                    egui::RichText::new("工作流已完成")
+                        .size(12.0)
+                        .color(col().SUCCESS),
+                );
             }
         });
     }
@@ -2334,12 +2336,7 @@ fn execute_click_with_retries(
                     log_write(
                         log,
                         log_file,
-                        format!(
-                            "Step {}: OR hit '{}' (of {})",
-                            step_index + 1,
-                            name,
-                            label
-                        ),
+                        format!("Step {}: OR hit '{}' (of {})", step_index + 1, name, label),
                     );
                 }
                 return ClickOutcome::Ok;
@@ -2376,9 +2373,20 @@ fn save_debug_screen(element_folder: &str, element_name: &str, best_score: f32) 
         .unwrap_or(0);
     let safe: String = element_name
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
-    let path = dir.join(format!("miss_{}_{}_{:.0}.png", safe, ts, best_score * 1000.0));
+    let path = dir.join(format!(
+        "miss_{}_{}_{:.0}.png",
+        safe,
+        ts,
+        best_score * 1000.0
+    ));
     let _ = img.save(&path);
 }
 
@@ -2504,11 +2512,7 @@ fn probe_any_element(
                     log_write(
                         log,
                         log_file,
-                        format!(
-                            "Step {}: OR vision hit '{}'",
-                            step_index + 1,
-                            name
-                        ),
+                        format!("Step {}: OR vision hit '{}'", step_index + 1, name),
                     );
                 }
                 return true;
@@ -2666,18 +2670,17 @@ fn match_on_image(
     let (t_width, t_height) = template.dimensions();
     let (s_width, s_height) = screen_img.dimensions();
 
-    let (search_x_start, search_y_start, search_x_end, search_y_end) = if let Some((rx, ry, rw, rh)) =
-        roi
-    {
-        // ROI is absolute screen coords → local to this monitor
-        let lx0 = (rx - origin_x).max(0) as u32;
-        let ly0 = (ry - origin_y).max(0) as u32;
-        let lx1 = (rx + rw - origin_x).clamp(0, s_width as i32) as u32;
-        let ly1 = (ry + rh - origin_y).clamp(0, s_height as i32) as u32;
-        (lx0, ly0, lx1, ly1)
-    } else {
-        (0, 0, s_width, s_height)
-    };
+    let (search_x_start, search_y_start, search_x_end, search_y_end) =
+        if let Some((rx, ry, rw, rh)) = roi {
+            // ROI is absolute screen coords → local to this monitor
+            let lx0 = (rx - origin_x).max(0) as u32;
+            let ly0 = (ry - origin_y).max(0) as u32;
+            let lx1 = (rx + rw - origin_x).clamp(0, s_width as i32) as u32;
+            let ly1 = (ry + rh - origin_y).clamp(0, s_height as i32) as u32;
+            (lx0, ly0, lx1, ly1)
+        } else {
+            (0, 0, s_width, s_height)
+        };
 
     if search_x_end <= search_x_start || search_y_end <= search_y_start {
         return MatchResult {
@@ -3060,4 +3063,3 @@ fn send_vk_chord(mods: &[u16], key: u16) {
 
 #[cfg(not(windows))]
 fn send_vk_chord(_mods: &[u16], _key: u16) {}
-

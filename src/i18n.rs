@@ -1,0 +1,371 @@
+//! Chinese / English UI strings.
+
+use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicU8, Ordering};
+
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Lang {
+    #[default]
+    Zh,
+    En,
+}
+
+impl Lang {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Lang::Zh => "zh",
+            Lang::En => "en",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "en" | "english" => Lang::En,
+            _ => Lang::Zh,
+        }
+    }
+
+    pub fn toggle(self) -> Self {
+        match self {
+            Lang::Zh => Lang::En,
+            Lang::En => Lang::Zh,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Lang::Zh => "中文",
+            Lang::En => "EN",
+        }
+    }
+}
+
+static LANG: AtomicU8 = AtomicU8::new(0); // 0=zh 1=en
+
+pub fn set_lang(lang: Lang) {
+    LANG.store(
+        match lang {
+            Lang::Zh => 0,
+            Lang::En => 1,
+        },
+        Ordering::Relaxed,
+    );
+}
+
+pub fn lang() -> Lang {
+    if LANG.load(Ordering::Relaxed) == 1 {
+        Lang::En
+    } else {
+        Lang::Zh
+    }
+}
+
+/// Translate a UI key for the current language.
+pub fn t(key: &str) -> &'static str {
+    match lang() {
+        Lang::Zh => zh(key),
+        Lang::En => en(key),
+    }
+}
+
+fn zh(key: &str) -> &'static str {
+    match key {
+        // app chrome
+        "app.tab.recorder" => "录制",
+        "app.tab.clicker" => "点击",
+        "app.tab.flow" => "流程图",
+        "app.tab.scribe" => "文档",
+        "app.status.running" => "运行中  Ctrl+Alt+F10",
+        "app.status.recording" => "文档录制中  Ctrl+Alt+F10 停止",
+        "app.status.ready" => "就绪  Ctrl+Alt+F9",
+        "app.chrome.close" => "关闭窗口",
+        "app.chrome.minimize" => "最小化",
+        "app.chrome.maximize" => "最大化/还原",
+        "app.pref.theme_light" => "明亮",
+        "app.pref.theme_dark" => "深色",
+        "app.pref.lang" => "语言",
+        "app.pref.theme" => "主题",
+        "brand.subtitle" => "视觉自动化",
+
+        // recorder
+        "recorder.header.title" => "元素库",
+        "recorder.header.subtitle" => "框选屏幕区域，将其保存为可复用模板",
+        "recorder.btn.new" => "新建元素  F5",
+        "recorder.btn.refresh" => "刷新",
+        "recorder.btn.add_state" => "添加状态  F6",
+        "recorder.btn.export" => "导出 CSV",
+        "recorder.filter" => "筛选",
+        "recorder.filter.hint" => "按名称过滤…",
+        "recorder.empty" => "暂无元素。点击「新建元素」开始录制模板。",
+        "recorder.no_match" => "没有匹配的元素。",
+        "recorder.hide_wait" => "截屏前隐藏等待",
+        "recorder.status.refreshed" => "已刷新",
+        "recorder.capture.start" => "开始录制  F5",
+
+        // clicker
+        "clicker.header.title" => "自动点击",
+        "clicker.header.subtitle" => "CSV 坐标序列或工作流文件回放",
+        "clicker.mode" => "模式",
+        "clicker.mode.csv" => "CSV",
+        "clicker.mode.workflow" => "工作流文件",
+        "clicker.btn.browse" => "浏览",
+        "clicker.btn.load" => "加载",
+        "clicker.btn.start" => "开始（3 秒倒计时）",
+        "clicker.btn.stop" => "停止",
+        "clicker.btn.reset" => "重置",
+        "clicker.btn.start_wf" => "开始工作流（3 秒倒计时）",
+        "clicker.field.csv" => "CSV 文件",
+        "clicker.field.interval" => "点击间隔",
+        "clicker.field.threshold" => "视觉阈值",
+        "clicker.pure_vision" => "纯视觉",
+        "clicker.field.element_dir" => "元素目录",
+        "clicker.field.workflow" => "工作流",
+        "clicker.log" => "运行日志",
+        "clicker.advanced" => "高级选项",
+
+        // flow
+        "flow.node.start" => "开始",
+        "flow.node.end" => "结束",
+        "flow.node.click" => "点击",
+        "flow.node.wait" => "等待",
+        "flow.node.pause" => "暂停",
+        "flow.node.manual" => "人工",
+        "flow.node.loop_start" => "循环开始",
+        "flow.node.loop_end" => "循环结束",
+        "flow.node.if_vision" => "视觉条件",
+        "flow.node.loop_while" => "条件循环",
+        "flow.node.type_text" => "键盘输入",
+        "flow.toolbox.title" => "节点库",
+        "flow.toolbox.subtitle" => "拖出端口连线 · 双端口=条件",
+        "flow.inspector.title" => "属性",
+        "flow.inspector.select" => "选中节点以编辑属性",
+        "flow.inspector.system" => "系统节点，无需配置",
+        "flow.btn.reset" => "重置示例图",
+        "flow.btn.layout" => "自动布局",
+        "flow.btn.undo" => "撤销  Ctrl+Z",
+        "flow.btn.redo" => "重做  Ctrl+Y",
+        "flow.btn.copy" => "复制选中  Ctrl+C",
+        "flow.btn.paste" => "粘贴  Ctrl+V",
+        "flow.btn.delete" => "删除选中  Del",
+        "flow.btn.open" => "打开",
+        "flow.btn.save" => "保存",
+        "flow.btn.run" => "▶  运行流程",
+        "flow.btn.example" => "加载示例：视觉点击×10",
+        "flow.btn.shot" => "📷 截屏绑定模板",
+        "flow.section.file" => "文件",
+        "flow.field.title" => "标题（导出 MD）",
+        "flow.field.desc" => "说明",
+        "flow.field.element" => "元素",
+        "flow.field.threshold" => "视觉匹配阈值",
+        "flow.field.pure_vision" => "本节点纯视觉（匹配才点）",
+        "flow.field.retries" => "重试次数",
+        "flow.field.retry_ms" => "重试间隔(ms)",
+        "flow.field.on_fail" => "失败策略",
+        "flow.fail.skip" => "跳过继续",
+        "flow.fail.abort" => "中止流程",
+        "flow.field.seconds" => "秒数",
+        "flow.field.type_text" => "输入内容",
+        "flow.field.type_ms" => "按键间隔(ms)",
+        "flow.field.loop_times" => "循环次数",
+        "flow.field.max_times" => "最大次数",
+        "flow.field.message" => "提示消息",
+        "flow.field.instruction" => "操作说明",
+        "flow.branch.yes" => "是",
+        "flow.branch.no" => "否",
+        "flow.ai.title" => "AI 生成流程图",
+        "flow.ai.subtitle" => "自然语言 → 可编辑流程图（需 CC Switch 或文档页 AI 设置）",
+        "flow.ai.hint" => "例：看到登录按钮就点，成功点 10 次",
+        "flow.ai.busy" => "生成中…",
+        "flow.ai.generate" => "AI 生成流程图",
+        "flow.ai.wait" => "正在请求模型，请稍候…",
+        "flow.canvas.hints" => "空白拖平移 · Ctrl+拖框选 · Ctrl+Z/Y · Ctrl+L 布局",
+        "flow.status.init" => "框选 · Ctrl+C/V · Ctrl+Z/Y · 自动布局 · Ctrl+Alt+F9/F10 启停",
+
+        // scribe
+        "scribe.header.title" => "操作文档",
+        "scribe.header.subtitle" => "F8 录制 · 编辑说明 · 导出指南",
+        "scribe.btn.start" => "开始录制",
+        "scribe.btn.stop" => "停止录制",
+        "scribe.btn.ai_settings" => "AI 设置",
+        "scribe.btn.ai_write" => "AI 写说明",
+        "scribe.btn.ai_busy" => "AI 生成中…",
+        "scribe.btn.gen_flow" => "生成流程图",
+        "scribe.btn.save" => "保存",
+        "scribe.minimize" => "录制时最小化",
+        "scribe.sessions" => "会话",
+        "scribe.refresh" => "刷新",
+        "scribe.no_sessions" => "暂无会话",
+        "scribe.empty" => "开始录制，或从左侧打开会话",
+        "scribe.recording" => "正在录制",
+        "scribe.field.title" => "文档标题",
+        "scribe.btn.apply" => "应用",
+        "scribe.field.step" => "步骤",
+        "scribe.step" => "步骤",
+        "scribe.btn.delete_step" => "删除此步",
+        "scribe.preview.focus" => "切聚焦",
+        "scribe.preview.full" => "切全屏",
+        "scribe.preview.full_label" => "截图预览 · 全屏（橙圈已烧录）",
+        "scribe.preview.crop_label" => "截图预览 · 聚焦（橙圈已烧录）",
+        "scribe.preview.none" => "无预览图",
+        "scribe.preview.reload" => "重新加载预览",
+        "scribe.field.step_title" => "步骤标题",
+        "scribe.field.step_desc" => "说明",
+        "scribe.ai.provider" => "AI 接入",
+        "scribe.ai.ccswitch" => "CC Switch 跟随代理",
+        "scribe.ai.glm" => "智谱 GLM 直连",
+        "scribe.ai.custom" => "自定义 API",
+        "scribe.ai.save" => "保存 AI 设置",
+        "scribe.status.init" => "F8 开始/停止录制 · 每次左键自动截点击所在屏。",
+
+        _ => "…",
+    }
+}
+
+fn en(key: &str) -> &'static str {
+    match key {
+        "app.tab.recorder" => "Record",
+        "app.tab.clicker" => "Click",
+        "app.tab.flow" => "Flow",
+        "app.tab.scribe" => "Docs",
+        "app.status.running" => "Running  Ctrl+Alt+F10",
+        "app.status.recording" => "Recording docs  Ctrl+Alt+F10 stop",
+        "app.status.ready" => "Ready  Ctrl+Alt+F9",
+        "app.chrome.close" => "Close window",
+        "app.chrome.minimize" => "Minimize",
+        "app.chrome.maximize" => "Maximize / restore",
+        "app.pref.theme_light" => "Light",
+        "app.pref.theme_dark" => "Dark",
+        "app.pref.lang" => "Language",
+        "app.pref.theme" => "Theme",
+        "brand.subtitle" => "Visual automation",
+
+        "recorder.header.title" => "Elements",
+        "recorder.header.subtitle" => "Marquee a screen region and save as a reusable template",
+        "recorder.btn.new" => "New element  F5",
+        "recorder.btn.refresh" => "Refresh",
+        "recorder.btn.add_state" => "Add state  F6",
+        "recorder.btn.export" => "Export CSV",
+        "recorder.filter" => "Filter",
+        "recorder.filter.hint" => "Filter by name…",
+        "recorder.empty" => "No elements yet. Click “New element” to capture a template.",
+        "recorder.no_match" => "No matching elements.",
+        "recorder.hide_wait" => "Hide wait before capture",
+        "recorder.status.refreshed" => "Refreshed",
+        "recorder.capture.start" => "Start capture  F5",
+
+        "clicker.header.title" => "Auto click",
+        "clicker.header.subtitle" => "Replay CSV coordinates or a workflow file",
+        "clicker.mode" => "Mode",
+        "clicker.mode.csv" => "CSV",
+        "clicker.mode.workflow" => "Workflow",
+        "clicker.btn.browse" => "Browse",
+        "clicker.btn.load" => "Load",
+        "clicker.btn.start" => "Start (3s countdown)",
+        "clicker.btn.stop" => "Stop",
+        "clicker.btn.reset" => "Reset",
+        "clicker.btn.start_wf" => "Start workflow (3s countdown)",
+        "clicker.field.csv" => "CSV file",
+        "clicker.field.interval" => "Click interval",
+        "clicker.field.threshold" => "Vision threshold",
+        "clicker.pure_vision" => "Pure vision",
+        "clicker.field.element_dir" => "Element folder",
+        "clicker.field.workflow" => "Workflow",
+        "clicker.log" => "Run log",
+        "clicker.advanced" => "Advanced",
+
+        "flow.node.start" => "Start",
+        "flow.node.end" => "End",
+        "flow.node.click" => "Click",
+        "flow.node.wait" => "Wait",
+        "flow.node.pause" => "Pause",
+        "flow.node.manual" => "Manual",
+        "flow.node.loop_start" => "Loop start",
+        "flow.node.loop_end" => "Loop end",
+        "flow.node.if_vision" => "Vision if",
+        "flow.node.loop_while" => "While match",
+        "flow.node.type_text" => "Type text",
+        "flow.toolbox.title" => "Nodes",
+        "flow.toolbox.subtitle" => "Drag ports to connect · dual ports = branch",
+        "flow.inspector.title" => "Properties",
+        "flow.inspector.select" => "Select a node to edit",
+        "flow.inspector.system" => "System node — no settings",
+        "flow.btn.reset" => "Reset sample",
+        "flow.btn.layout" => "Auto layout",
+        "flow.btn.undo" => "Undo  Ctrl+Z",
+        "flow.btn.redo" => "Redo  Ctrl+Y",
+        "flow.btn.copy" => "Copy  Ctrl+C",
+        "flow.btn.paste" => "Paste  Ctrl+V",
+        "flow.btn.delete" => "Delete  Del",
+        "flow.btn.open" => "Open",
+        "flow.btn.save" => "Save",
+        "flow.btn.run" => "▶  Run flow",
+        "flow.btn.example" => "Load sample: vision click ×10",
+        "flow.btn.shot" => "📷 Capture template",
+        "flow.section.file" => "File",
+        "flow.field.title" => "Title (MD export)",
+        "flow.field.desc" => "Description",
+        "flow.field.element" => "Element",
+        "flow.field.threshold" => "Match threshold",
+        "flow.field.pure_vision" => "Pure vision (click only on match)",
+        "flow.field.retries" => "Retries",
+        "flow.field.retry_ms" => "Retry interval (ms)",
+        "flow.field.on_fail" => "On fail",
+        "flow.fail.skip" => "Skip",
+        "flow.fail.abort" => "Abort",
+        "flow.field.seconds" => "Seconds",
+        "flow.field.type_text" => "Text / keys",
+        "flow.field.type_ms" => "Key interval (ms)",
+        "flow.field.loop_times" => "Loop count",
+        "flow.field.max_times" => "Max times",
+        "flow.field.message" => "Message",
+        "flow.field.instruction" => "Instructions",
+        "flow.branch.yes" => "Yes",
+        "flow.branch.no" => "No",
+        "flow.ai.title" => "AI generate flow",
+        "flow.ai.subtitle" => "Natural language → editable flow (CC Switch or Docs AI settings)",
+        "flow.ai.hint" => "e.g. click login when seen, 10 successful clicks",
+        "flow.ai.busy" => "Generating…",
+        "flow.ai.generate" => "AI generate flow",
+        "flow.ai.wait" => "Calling model, please wait…",
+        "flow.canvas.hints" => "Drag empty to pan · Ctrl+drag select · Ctrl+Z/Y · Ctrl+L layout",
+        "flow.status.init" => "Select · Ctrl+C/V · Ctrl+Z/Y · Auto layout · Ctrl+Alt+F9/F10",
+
+        "scribe.header.title" => "Operation docs",
+        "scribe.header.subtitle" => "F8 record · edit notes · export guide",
+        "scribe.btn.start" => "Start recording",
+        "scribe.btn.stop" => "Stop recording",
+        "scribe.btn.ai_settings" => "AI settings",
+        "scribe.btn.ai_write" => "AI captions",
+        "scribe.btn.ai_busy" => "AI working…",
+        "scribe.btn.gen_flow" => "Build flow",
+        "scribe.btn.save" => "Save",
+        "scribe.minimize" => "Minimize while recording",
+        "scribe.sessions" => "Sessions",
+        "scribe.refresh" => "Refresh",
+        "scribe.no_sessions" => "No sessions",
+        "scribe.empty" => "Start recording, or open a session on the left",
+        "scribe.recording" => "Recording",
+        "scribe.field.title" => "Document title",
+        "scribe.btn.apply" => "Apply",
+        "scribe.field.step" => "Steps",
+        "scribe.step" => "Step",
+        "scribe.btn.delete_step" => "Delete step",
+        "scribe.preview.focus" => "Focus crop",
+        "scribe.preview.full" => "Full frame",
+        "scribe.preview.full_label" => "Preview · full (marker baked in)",
+        "scribe.preview.crop_label" => "Preview · focus (marker baked in)",
+        "scribe.preview.none" => "No preview",
+        "scribe.preview.reload" => "Reload preview",
+        "scribe.field.step_title" => "Step title",
+        "scribe.field.step_desc" => "Description",
+        "scribe.ai.provider" => "AI provider",
+        "scribe.ai.ccswitch" => "CC Switch proxy",
+        "scribe.ai.glm" => "Zhipu GLM",
+        "scribe.ai.custom" => "Custom API",
+        "scribe.ai.save" => "Save AI settings",
+        "scribe.status.init" => "F8 start/stop · each left-click captures the monitor under the cursor.",
+
+        _ => "…",
+    }
+}

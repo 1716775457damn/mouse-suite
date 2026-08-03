@@ -3,11 +3,9 @@
 use crate::common::ElementCatalogItem;
 use crate::flow_ai;
 use crate::scribe_ai;
-use crate::theme::colors;
+use crate::theme::{self, col, CTRL_H};
 use crate::workflow::{self, StepType, WorkflowStep};
-use eframe::egui::{
-    self, Color32, FontId, Pos2, Rect, Sense, Stroke, Vec2,
-};
+use eframe::egui::{self, Color32, FontId, Pos2, Rect, Sense, Stroke, Vec2};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -40,31 +38,31 @@ pub enum NodeKind {
 impl NodeKind {
     fn color(self) -> Color32 {
         match self {
-            NodeKind::Start => colors::NODE_START,
-            NodeKind::End => colors::NODE_END,
-            NodeKind::Click => colors::NODE_CLICK,
-            NodeKind::Wait => colors::NODE_WAIT,
-            NodeKind::Pause => colors::NODE_PAUSE,
-            NodeKind::Manual => colors::NODE_MANUAL,
-            NodeKind::LoopStart | NodeKind::LoopEnd | NodeKind::LoopWhile => colors::NODE_LOOP,
-            NodeKind::IfVision => colors::NODE_IF,
-            NodeKind::TypeText => colors::NODE_TYPE,
+            NodeKind::Start => col().NODE_START,
+            NodeKind::End => col().NODE_END,
+            NodeKind::Click => col().NODE_CLICK,
+            NodeKind::Wait => col().NODE_WAIT,
+            NodeKind::Pause => col().NODE_PAUSE,
+            NodeKind::Manual => col().NODE_MANUAL,
+            NodeKind::LoopStart | NodeKind::LoopEnd | NodeKind::LoopWhile => col().NODE_LOOP,
+            NodeKind::IfVision => col().NODE_IF,
+            NodeKind::TypeText => col().NODE_TYPE,
         }
     }
 
     fn title(self) -> &'static str {
         match self {
-            NodeKind::Start => "开始",
-            NodeKind::End => "结束",
-            NodeKind::Click => "点击",
-            NodeKind::Wait => "等待",
-            NodeKind::Pause => "暂停",
-            NodeKind::Manual => "人工",
-            NodeKind::LoopStart => "循环开始",
-            NodeKind::LoopEnd => "循环结束",
-            NodeKind::IfVision => "视觉条件",
-            NodeKind::LoopWhile => "条件循环",
-            NodeKind::TypeText => "键盘输入",
+            NodeKind::Start => crate::i18n::t("flow.node.start"),
+            NodeKind::End => crate::i18n::t("flow.node.end"),
+            NodeKind::Click => crate::i18n::t("flow.node.click"),
+            NodeKind::Wait => crate::i18n::t("flow.node.wait"),
+            NodeKind::Pause => crate::i18n::t("flow.node.pause"),
+            NodeKind::Manual => crate::i18n::t("flow.node.manual"),
+            NodeKind::LoopStart => crate::i18n::t("flow.node.loop_start"),
+            NodeKind::LoopEnd => crate::i18n::t("flow.node.loop_end"),
+            NodeKind::IfVision => crate::i18n::t("flow.node.if_vision"),
+            NodeKind::LoopWhile => crate::i18n::t("flow.node.loop_while"),
+            NodeKind::TypeText => crate::i18n::t("flow.node.type_text"),
         }
     }
 }
@@ -91,7 +89,8 @@ fn default_max_times() -> u32 {
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, Debug)]
 #[serde(rename_all = "lowercase")]
-pub enum EdgeBranch { // pub for flow_md
+pub enum EdgeBranch {
+    // pub for flow_md
     #[default]
     Main,
     True,
@@ -181,7 +180,10 @@ impl FlowNode {
     }
 
     fn rect(&self) -> Rect {
-        Rect::from_min_size(Pos2::new(self.pos[0], self.pos[1]), Vec2::new(NODE_W, NODE_H))
+        Rect::from_min_size(
+            Pos2::new(self.pos[0], self.pos[1]),
+            Vec2::new(NODE_W, NODE_H),
+        )
     }
 
     fn in_port(&self) -> Pos2 {
@@ -434,7 +436,7 @@ impl FlowEditor {
             path: String::new(),
             title: String::new(),
             description: String::new(),
-            status: "框选 · Ctrl+C/V · Ctrl+Z/Y · 自动布局 · Ctrl+Alt+F9/F10 启停".into(),
+            status: crate::i18n::t("flow.status.init").into(),
             pending_run: None,
             pending_screenshot: None,
             element_catalog: Vec::new(),
@@ -509,8 +511,13 @@ impl FlowEditor {
         self.nodes = snap.nodes;
         self.edges = snap.edges;
         self.next_id = snap.next_id;
-        self.selected.retain(|id| self.nodes.iter().any(|n| n.id == *id));
-        if self.primary.map(|p| !self.selected.contains(&p)).unwrap_or(true) {
+        self.selected
+            .retain(|id| self.nodes.iter().any(|n| n.id == *id));
+        if self
+            .primary
+            .map(|p| !self.selected.contains(&p))
+            .unwrap_or(true)
+        {
             self.primary = self.selected.iter().next().copied();
         }
     }
@@ -612,7 +619,8 @@ impl FlowEditor {
 
     /// Load built-in example: vision match → click, 10 successful iterations.
     pub fn load_example_vision_click_10(&mut self) -> Result<(), String> {
-        let (title, doc) = crate::flow_md::import_markdown(crate::flow_md::EXAMPLE_VISION_CLICK_10_MD)?;
+        let (title, doc) =
+            crate::flow_md::import_markdown(crate::flow_md::EXAMPLE_VISION_CLICK_10_MD)?;
         self.push_undo();
         self.nodes = doc.nodes;
         self.edges = doc.edges;
@@ -644,7 +652,11 @@ impl FlowEditor {
             self.status = "请先输入自然语言流程描述".into();
             return;
         }
-        let names: Vec<String> = self.element_catalog.iter().map(|e| e.name.clone()).collect();
+        let names: Vec<String> = self
+            .element_catalog
+            .iter()
+            .map(|e| e.name.clone())
+            .collect();
         let cfg = scribe_ai::AiConfig::load();
         let (tx, rx) = mpsc::channel();
         self.ai_job = Some(rx);
@@ -668,21 +680,85 @@ impl FlowEditor {
                 let e = doc.edges.len();
                 self.apply_generated_flow(title, description, doc);
                 self.ai_job = None;
+                self.ai_busy.store(false, Ordering::Relaxed);
                 self.status = format!("AI 已生成流程图（{n} 节点 / {e} 边），可继续编辑");
                 ctx.request_repaint();
             }
             Ok(Err(err)) => {
                 self.ai_job = None;
+                self.ai_busy.store(false, Ordering::Relaxed);
                 self.status = format!("AI 生成失败: {err}");
                 ctx.request_repaint();
             }
             Err(TryRecvError::Empty) => {
-                ctx.request_repaint();
+                ctx.request_repaint_after(std::time::Duration::from_millis(100));
             }
             Err(TryRecvError::Disconnected) => {
                 self.ai_job = None;
                 self.ai_busy.store(false, Ordering::Relaxed);
+                if !self.status.starts_with("AI 已生成") && !self.status.starts_with("AI 生成失败")
+                {
+                    self.status = "AI 生成中断（后台任务异常退出）".into();
+                }
+                ctx.request_repaint();
             }
+        }
+    }
+
+    fn ui_ai_panel(&mut self, ui: &mut egui::Ui) {
+        ui.label(egui::RichText::new(crate::i18n::t("flow.ai.title")).strong().size(13.0));
+        ui.label(
+            egui::RichText::new(crate::i18n::t("flow.ai.subtitle"))
+                .size(10.0)
+                .color(col().MUTED),
+        );
+        ui.add_space(4.0);
+        ui.add(
+            egui::TextEdit::multiline(&mut self.ai_prompt)
+                .desired_width(f32::INFINITY)
+                .desired_rows(3)
+                .hint_text(crate::i18n::t("flow.ai.hint")),
+        );
+        ui.add_space(4.0);
+        let ai_busy = self.ai_busy.load(Ordering::Relaxed);
+        ui.add_enabled_ui(!ai_busy, |ui| {
+            let gen = egui::Button::new(
+                egui::RichText::new(if ai_busy {
+                    crate::i18n::t("flow.ai.busy")
+                } else {
+                    crate::i18n::t("flow.ai.title")
+                })
+                .color(Color32::WHITE)
+                .strong(),
+            )
+            .fill(col().ACCENT)
+            .min_size(Vec2::new(ui.available_width().max(120.0), CTRL_H));
+            if ui.add(gen).clicked() {
+                self.request_ai_generate();
+            }
+        });
+        if ai_busy {
+            ui.label(
+                egui::RichText::new(crate::i18n::t("flow.ai.wait"))
+                    .size(11.0)
+                    .color(col().ACCENT),
+            );
+        } else if self.status.starts_with("AI 生成失败")
+            || self.status.starts_with("请先输入自然语言")
+            || self.status.starts_with("AI 生成中断")
+        {
+            ui.label(
+                egui::RichText::new(&self.status)
+                    .size(11.0)
+                    .color(Color32::from_rgb(200, 80, 70)),
+            );
+        } else if self.status.starts_with("AI 已生成") || self.status.starts_with("AI 正在生成")
+        {
+            ui.label(
+                egui::RichText::new(&self.status)
+                    .size(11.0)
+                    .color(col().ACCENT),
+            );
         }
     }
 
@@ -692,7 +768,11 @@ impl FlowEditor {
         prompt: &str,
         replace: bool,
     ) -> Result<(String, usize, usize), String> {
-        let names: Vec<String> = self.element_catalog.iter().map(|e| e.name.clone()).collect();
+        let names: Vec<String> = self
+            .element_catalog
+            .iter()
+            .map(|e| e.name.clone())
+            .collect();
         let cfg = scribe_ai::AiConfig::load();
         let (title, description, doc) = flow_ai::generate_flow_document(prompt, &names, &cfg)?;
         let nodes = doc.nodes.len();
@@ -754,11 +834,8 @@ impl FlowEditor {
                     retry_ms,
                     on_fail,
                 } => {
-                    let mut n = FlowNode::new(
-                        self.alloc_id(),
-                        NodeKind::Click,
-                        Pos2::new(x, 180.0),
-                    );
+                    let mut n =
+                        FlowNode::new(self.alloc_id(), NodeKind::Click, Pos2::new(x, 180.0));
                     n.element_name = element_name.clone();
                     n.or_elements = or_elements.clone();
                     n.fallback.clear();
@@ -783,20 +860,13 @@ impl FlowEditor {
                     n
                 }
                 StepType::Wait { seconds } => {
-                    let mut n = FlowNode::new(
-                        self.alloc_id(),
-                        NodeKind::Wait,
-                        Pos2::new(x, 180.0),
-                    );
+                    let mut n = FlowNode::new(self.alloc_id(), NodeKind::Wait, Pos2::new(x, 180.0));
                     n.seconds = *seconds;
                     n
                 }
                 StepType::TypeText { text, interval_ms } => {
-                    let mut n = FlowNode::new(
-                        self.alloc_id(),
-                        NodeKind::TypeText,
-                        Pos2::new(x, 180.0),
-                    );
+                    let mut n =
+                        FlowNode::new(self.alloc_id(), NodeKind::TypeText, Pos2::new(x, 180.0));
                     n.type_text = text.clone();
                     if let Some(ms) = interval_ms {
                         n.type_interval_ms = *ms;
@@ -804,11 +874,8 @@ impl FlowEditor {
                     n
                 }
                 StepType::LoopStart { times } => {
-                    let mut n = FlowNode::new(
-                        self.alloc_id(),
-                        NodeKind::LoopStart,
-                        Pos2::new(x, 180.0),
-                    );
+                    let mut n =
+                        FlowNode::new(self.alloc_id(), NodeKind::LoopStart, Pos2::new(x, 180.0));
                     n.seconds = *times;
                     n
                 }
@@ -820,11 +887,8 @@ impl FlowEditor {
                     retry_ms,
                     max_times,
                 } => {
-                    let mut n = FlowNode::new(
-                        self.alloc_id(),
-                        NodeKind::LoopWhile,
-                        Pos2::new(x, 180.0),
-                    );
+                    let mut n =
+                        FlowNode::new(self.alloc_id(), NodeKind::LoopWhile, Pos2::new(x, 180.0));
                     n.element_name = element_name.clone();
                     n.or_elements = or_elements.clone();
                     if let Some(t) = threshold {
@@ -847,11 +911,8 @@ impl FlowEditor {
                     retry_ms,
                     ..
                 } => {
-                    let mut n = FlowNode::new(
-                        self.alloc_id(),
-                        NodeKind::IfVision,
-                        Pos2::new(x, 180.0),
-                    );
+                    let mut n =
+                        FlowNode::new(self.alloc_id(), NodeKind::IfVision, Pos2::new(x, 180.0));
                     n.element_name = element_name.clone();
                     n.or_elements = or_elements.clone();
                     if let Some(t) = threshold {
@@ -873,11 +934,8 @@ impl FlowEditor {
                     FlowNode::new(self.alloc_id(), NodeKind::LoopEnd, Pos2::new(x, 180.0))
                 }
                 StepType::Pause { message } => {
-                    let mut n = FlowNode::new(
-                        self.alloc_id(),
-                        NodeKind::Pause,
-                        Pos2::new(x, 180.0),
-                    );
+                    let mut n =
+                        FlowNode::new(self.alloc_id(), NodeKind::Pause, Pos2::new(x, 180.0));
                     n.message = message.clone();
                     n
                 }
@@ -885,11 +943,8 @@ impl FlowEditor {
                     message,
                     instruction,
                 } => {
-                    let mut n = FlowNode::new(
-                        self.alloc_id(),
-                        NodeKind::Manual,
-                        Pos2::new(x, 180.0),
-                    );
+                    let mut n =
+                        FlowNode::new(self.alloc_id(), NodeKind::Manual, Pos2::new(x, 180.0));
                     n.message = message.clone();
                     n.instruction = instruction.clone().unwrap_or_default();
                     n
@@ -988,7 +1043,11 @@ impl FlowEditor {
             self.selected.remove(&id);
             removed += 1;
         }
-        if self.primary.map(|p| !self.selected.contains(&p)).unwrap_or(true) {
+        if self
+            .primary
+            .map(|p| !self.selected.contains(&p))
+            .unwrap_or(true)
+        {
             self.primary = self.selected.iter().next().copied();
         }
         if removed == 0 {
@@ -1359,20 +1418,14 @@ impl FlowEditor {
             NodeKind::LoopEnd => {
                 if depth <= 0 {
                     visiting.remove(&cur);
-                    return Err(format!(
-                        "「循环结束」#{} 缺少配对的循环开始",
-                        cur
-                    ));
+                    return Err(format!("「循环结束」#{} 缺少配对的循环开始", cur));
                 }
                 depth -= 1;
             }
             NodeKind::End => {
                 visiting.remove(&cur);
                 if depth != 0 {
-                    return Err(format!(
-                        "到达结束时仍有 {} 层未闭合的循环",
-                        depth
-                    ));
+                    return Err(format!("到达结束时仍有 {} 层未闭合的循环", depth));
                 }
                 return Ok(());
             }
@@ -1452,15 +1505,15 @@ impl FlowEditor {
 
                 // 否 → 回到本条件：未达标重试，只有「是→点击→循环结束」才算一次
                 if self.else_retries_if(cur, else_to) {
-                    let loop_end_id = self.find_kind_along(then_to, NodeKind::LoopEnd).ok_or_else(
-                        || {
+                    let loop_end_id = self
+                        .find_kind_along(then_to, NodeKind::LoopEnd)
+                        .ok_or_else(|| {
                             format!(
                                 "「视觉条件」#{} 的「是」路径需连到「循环结束」，\
                                  这样未达标重试才不占用循环次数",
                                 cur
                             )
-                        },
-                    )?;
+                        })?;
 
                     let if_pc = steps.len();
                     steps.push(WorkflowStep::with_node(
@@ -1639,8 +1692,7 @@ impl FlowEditor {
             return Ok(());
         }
         if path.ends_with(".json") {
-            let doc: FlowDocument =
-                serde_json::from_str(&content).map_err(|e| e.to_string())?;
+            let doc: FlowDocument = serde_json::from_str(&content).map_err(|e| e.to_string())?;
             self.push_undo();
             self.nodes = doc.nodes;
             self.edges = doc.edges;
@@ -1787,7 +1839,10 @@ impl FlowEditor {
                 };
                 let id = node.id;
                 // place horizontally
-                node.pos = [80.0 + (y - 80.0) * 0.0 + (self.nodes.len() as f32 - 1.0) * 180.0, 180.0];
+                node.pos = [
+                    80.0 + (y - 80.0) * 0.0 + (self.nodes.len() as f32 - 1.0) * 180.0,
+                    180.0,
+                ];
                 self.edges.push(FlowEdge {
                     from: prev,
                     to: id,
@@ -1817,26 +1872,33 @@ impl FlowEditor {
     pub fn ui(&mut self, ctx: &egui::Context) {
         self.drain_ai(ctx);
 
-        // Left toolbox
+        // Left toolbox — width follows window / language; user can drag to resize.
+        let toolbox_default = if crate::i18n::lang() == crate::i18n::Lang::En {
+            178.0
+        } else {
+            158.0
+        };
         egui::SidePanel::left("flow_toolbox")
-            .exact_width(158.0)
+            .default_width(toolbox_default)
+            .width_range(132.0..=260.0)
+            .resizable(true)
             .frame(
                 egui::Frame::none()
-                    .fill(colors::PANEL_ELEVATED)
-                    .stroke(Stroke::new(1.0, colors::PANEL_EDGE))
+                    .fill(col().PANEL_ELEVATED)
+                    .stroke(Stroke::new(1.0, col().PANEL_EDGE))
                     .inner_margin(egui::Margin::same(10.0)),
             )
             .show(ctx, |ui| {
                 ui.label(
-                    egui::RichText::new("节点库")
+                    egui::RichText::new(crate::i18n::t("flow.toolbox.title"))
                         .size(13.0)
                         .strong()
-                        .color(colors::TEXT),
+                        .color(col().TEXT),
                 );
                 ui.label(
-                    egui::RichText::new("拖出端口连线 · 双端口=条件")
+                    egui::RichText::new(crate::i18n::t("flow.toolbox.subtitle"))
                         .size(10.0)
-                        .color(colors::MUTED),
+                        .color(col().MUTED),
                 );
                 ui.add_space(8.0);
                 for (kind, hint) in [
@@ -1851,12 +1913,10 @@ impl FlowEditor {
                     (NodeKind::Manual, "人工介入"),
                     (NodeKind::End, "流程结束"),
                 ] {
-                    let btn = egui::Button::new(
-                        egui::RichText::new(kind.title()).color(Color32::WHITE).strong(),
-                    )
-                    .fill(kind.color())
-                    .min_size(Vec2::new(138.0, 30.0));
-                    if ui.add(btn).on_hover_text(hint).clicked() {
+                    if theme::fill_button(ui, kind.title(), kind.color())
+                        .on_hover_text(hint)
+                        .clicked()
+                    {
                         self.add_node(kind);
                     }
                     ui.add_space(3.0);
@@ -1864,518 +1924,537 @@ impl FlowEditor {
                 ui.add_space(10.0);
                 ui.separator();
                 ui.add_space(6.0);
-                if ui.button("重置示例图").clicked() {
+                if ui.button(crate::i18n::t("flow.btn.reset")).clicked() {
                     self.reset_default_graph();
                 }
-                if ui.button("自动布局").clicked() {
+                if ui.button(crate::i18n::t("flow.btn.layout")).clicked() {
                     self.auto_layout();
                 }
-                if ui.button("撤销  Ctrl+Z").clicked() {
+                if ui.button(crate::i18n::t("flow.btn.undo")).clicked() {
                     self.agent_undo();
                 }
-                if ui.button("重做  Ctrl+Y").clicked() {
+                if ui.button(crate::i18n::t("flow.btn.redo")).clicked() {
                     self.agent_redo();
                 }
-                if ui.button("复制选中  Ctrl+C").clicked() {
+                if ui.button(crate::i18n::t("flow.btn.copy")).clicked() {
                     self.copy_selection();
                 }
-                if ui.button("粘贴  Ctrl+V").clicked() {
+                if ui.button(crate::i18n::t("flow.btn.paste")).clicked() {
                     self.paste_clipboard();
                 }
-                if ui.button("删除选中  Del").clicked() {
+                if ui.button(crate::i18n::t("flow.btn.delete")).clicked() {
                     self.delete_selected();
                 }
             });
 
-        // Right inspector
+        // Right inspector — scales with window; drag edge to resize.
+        let inspector_default = if crate::i18n::lang() == crate::i18n::Lang::En {
+            260.0
+        } else {
+            228.0
+        };
         egui::SidePanel::right("flow_inspector")
-            .exact_width(228.0)
+            .default_width(inspector_default)
+            .width_range(200.0..=360.0)
+            .resizable(true)
             .frame(
                 egui::Frame::none()
-                    .fill(colors::PANEL_ELEVATED)
-                    .stroke(Stroke::new(1.0, colors::PANEL_EDGE))
+                    .fill(col().PANEL_ELEVATED)
+                    .stroke(Stroke::new(1.0, col().PANEL_EDGE))
                     .inner_margin(egui::Margin::same(10.0)),
             )
             .show(ctx, |ui| {
-                ui.label(
-                    egui::RichText::new("属性")
-                        .size(13.0)
-                        .strong()
-                        .color(colors::TEXT),
-                );
-                ui.add_space(8.0);
-                let mut request_shot: Option<String> = None;
-                let catalog = self.element_catalog.clone();
-                for item in &catalog {
-                    self.ensure_catalog_tex(ctx, &item.name, &item.preview_path);
-                }
+                egui::ScrollArea::vertical()
+                    .id_salt("flow_inspector_scroll")
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        // AI first so it's never clipped below the fold.
+                        self.ui_ai_panel(ui);
+                        ui.add_space(12.0);
+                        ui.separator();
+                        ui.add_space(8.0);
 
-                if let Some(id) = self.primary {
-                    let before = self.snapshot();
-                    let multi_hint = if self.selected.len() > 1 {
-                        format!("  (+{})", self.selected.len() - 1)
-                    } else {
-                        String::new()
-                    };
-                    let mut props_changed = false;
+                        ui.label(
+                            egui::RichText::new(crate::i18n::t("flow.inspector.title"))
+                                .size(13.0)
+                                .strong()
+                                .color(col().TEXT),
+                        );
+                        ui.add_space(8.0);
+                        let mut request_shot: Option<String> = None;
+                        let catalog = self.element_catalog.clone();
+                        for item in &catalog {
+                            self.ensure_catalog_tex(ctx, &item.name, &item.preview_path);
+                        }
 
-                    let kind = self.nodes.iter().find(|n| n.id == id).map(|n| n.kind);
-                    ui.label(format!(
-                        "#{}  {}{}",
-                        id,
-                        kind.map(|k| k.title()).unwrap_or("?"),
-                        multi_hint
-                    ));
-                    ui.add_space(6.0);
-
-                    match kind {
-                        Some(NodeKind::Click) => {
-                            let mut name = String::new();
-                            let mut or_elements = Vec::new();
-                            let mut threshold = 0.85_f32;
-                            let mut pure_vision = false;
-                            let mut retries = 0_u32;
-                            let mut retry_ms = 300_u64;
-                            let mut on_fail = FailAction::Skip;
-                            if let Some(n) = self.nodes.iter().find(|n| n.id == id) {
-                                name = n.element_name.clone();
-                                or_elements = n.or_elements_for_edit();
-                                threshold = n.threshold;
-                                pure_vision = n.pure_vision;
-                                retries = n.retries;
-                                retry_ms = n.retry_ms;
-                                on_fail = n.on_fail;
-                            }
-                            ui.label("元素");
-                            props_changed |=
-                                self.element_name_picker(ui, ctx, "pick_click", &mut name, false);
-                            props_changed |= self.or_elements_editor(
-                                ui,
-                                ctx,
-                                "or_click",
-                                &mut or_elements,
-                            );
-                            ui.add_space(6.0);
-                            ui.label("视觉匹配阈值");
-                            props_changed |= ui
-                                .add(egui::Slider::new(&mut threshold, 0.5..=0.99).fixed_decimals(2))
-                                .changed();
-                            props_changed |= ui
-                                .checkbox(&mut pure_vision, "本节点纯视觉（匹配才点）")
-                                .changed();
-                            ui.add_space(4.0);
-                            ui.horizontal(|ui| {
-                                ui.label("重试次数");
-                                props_changed |= ui
-                                    .add(egui::DragValue::new(&mut retries).range(0..=20))
-                                    .changed();
-                            });
-                            ui.horizontal(|ui| {
-                                ui.label("重试间隔(ms)");
-                                props_changed |= ui
-                                    .add(egui::DragValue::new(&mut retry_ms).range(0..=60000))
-                                    .changed();
-                            });
-                            ui.horizontal(|ui| {
-                                ui.label("失败策略");
-                                let prev = on_fail;
-                                egui::ComboBox::from_id_salt("on_fail")
-                                    .selected_text(match on_fail {
-                                        FailAction::Skip => "跳过继续",
-                                        FailAction::Abort => "中止流程",
-                                    })
-                                    .show_ui(ui, |ui| {
-                                        ui.selectable_value(
-                                            &mut on_fail,
-                                            FailAction::Skip,
-                                            "跳过继续",
-                                        );
-                                        ui.selectable_value(
-                                            &mut on_fail,
-                                            FailAction::Abort,
-                                            "中止流程",
-                                        );
-                                    });
-                                if on_fail != prev {
-                                    props_changed = true;
-                                }
-                            });
-                            ui.add_space(6.0);
-                            if ui
-                                .button("📷 截屏绑定模板")
-                                .on_hover_text("先隐藏软件窗口，完全隐藏后再截屏框选")
-                                .clicked()
-                            {
-                                request_shot = Some(name.clone());
-                            }
-                            if let Some(n) = self.node_mut(id) {
-                                n.element_name = name;
-                                n.or_elements = or_elements;
-                                n.fallback.clear();
-                                n.threshold = threshold;
-                                n.pure_vision = pure_vision;
-                                n.retries = retries;
-                                n.retry_ms = retry_ms;
-                                n.on_fail = on_fail;
-                            }
-                        }
-                        Some(NodeKind::Wait) => {
-                            if let Some(node) = self.node_mut(id) {
-                                ui.label("秒数");
-                                props_changed |= ui
-                                    .add(egui::DragValue::new(&mut node.seconds).range(1..=3600))
-                                    .changed();
-                            }
-                        }
-                        Some(NodeKind::TypeText) => {
-                            let mut text = String::new();
-                            let mut interval = 30_u64;
-                            if let Some(n) = self.nodes.iter().find(|n| n.id == id) {
-                                text = n.type_text.clone();
-                                interval = n.type_interval_ms;
-                            }
-                            ui.label("输入内容");
-                            props_changed |= ui
-                                .add(
-                                    egui::TextEdit::multiline(&mut text)
-                                        .desired_width(f32::INFINITY)
-                                        .desired_rows(3)
-                                        .hint_text("文字或 {Enter} {Tab} {Ctrl+V}"),
-                                )
-                                .changed();
-                            ui.add_space(4.0);
-                            ui.horizontal(|ui| {
-                                ui.label("按键间隔(ms)");
-                                props_changed |= ui
-                                    .add(egui::DragValue::new(&mut interval).range(0..=2000))
-                                    .changed();
-                            });
-                            ui.label(
-                                egui::RichText::new(
-                                    "支持中文；特殊键：{Enter} {Tab} {Esc} {Backspace}\n\
-                                     {Ctrl+A/C/V/X/Z}；字面量大括号写 {{ }}",
-                                )
-                                .color(colors::MUTED)
-                                .size(11.0),
-                            );
-                            if let Some(n) = self.node_mut(id) {
-                                n.type_text = text;
-                                n.type_interval_ms = interval;
-                            }
-                        }
-                        Some(NodeKind::LoopStart) => {
-                            if let Some(node) = self.node_mut(id) {
-                                ui.label("循环次数");
-                                props_changed |= ui
-                                    .add(egui::DragValue::new(&mut node.seconds).range(1..=9999))
-                                    .changed();
-                            }
-                        }
-                        Some(NodeKind::LoopWhile) => {
-                            let mut name = String::new();
-                            let mut or_elements = Vec::new();
-                            let mut threshold = 0.85_f32;
-                            let mut retries = 0_u32;
-                            let mut retry_ms = 300_u64;
-                            let mut max_times = 10_u32;
-                            if let Some(n) = self.nodes.iter().find(|n| n.id == id) {
-                                name = n.element_name.clone();
-                                or_elements = n.or_elements_for_edit();
-                                threshold = n.threshold;
-                                retries = n.retries;
-                                retry_ms = n.retry_ms;
-                                max_times = n.max_times;
-                            }
-                            ui.label("元素（匹配则继续）");
-                            props_changed |=
-                                self.element_name_picker(ui, ctx, "pick_while", &mut name, false);
-                            props_changed |= self.or_elements_editor(
-                                ui,
-                                ctx,
-                                "or_while",
-                                &mut or_elements,
-                            );
-                            ui.add_space(4.0);
-                            ui.label("视觉匹配阈值");
-                            props_changed |= ui
-                                .add(egui::Slider::new(&mut threshold, 0.5..=0.99).fixed_decimals(2))
-                                .changed();
-                            ui.horizontal(|ui| {
-                                ui.label("重试次数");
-                                props_changed |= ui
-                                    .add(egui::DragValue::new(&mut retries).range(0..=20))
-                                    .changed();
-                            });
-                            ui.horizontal(|ui| {
-                                ui.label("重试间隔(ms)");
-                                props_changed |= ui
-                                    .add(egui::DragValue::new(&mut retry_ms).range(0..=60000))
-                                    .changed();
-                            });
-                            ui.horizontal(|ui| {
-                                ui.label("最大次数");
-                                props_changed |= ui
-                                    .add(egui::DragValue::new(&mut max_times).range(1..=9999))
-                                    .changed();
-                            });
-                            ui.label(
-                                egui::RichText::new("与「循环结束」配对；匹配失败或达上限则退出")
-                                    .color(colors::MUTED),
-                            );
-                            ui.add_space(6.0);
-                            if ui
-                                .button("📷 截屏绑定模板")
-                                .on_hover_text("先隐藏软件窗口，完全隐藏后再截屏框选")
-                                .clicked()
-                            {
-                                request_shot = Some(name.clone());
-                            }
-                            if let Some(n) = self.node_mut(id) {
-                                n.element_name = name;
-                                n.or_elements = or_elements;
-                                n.fallback.clear();
-                                n.threshold = threshold;
-                                n.retries = retries;
-                                n.retry_ms = retry_ms;
-                                n.max_times = max_times;
-                            }
-                        }
-                        Some(NodeKind::IfVision) => {
-                            let mut name = String::new();
-                            let mut or_elements = Vec::new();
-                            let mut threshold = 0.85_f32;
-                            let mut retries = 0_u32;
-                            let mut retry_ms = 300_u64;
-                            if let Some(n) = self.nodes.iter().find(|n| n.id == id) {
-                                name = n.element_name.clone();
-                                or_elements = n.or_elements_for_edit();
-                                threshold = n.threshold;
-                                retries = n.retries;
-                                retry_ms = n.retry_ms;
-                            }
-                            ui.label("元素（只判断不点击）");
-                            props_changed |=
-                                self.element_name_picker(ui, ctx, "pick_if", &mut name, false);
-                            props_changed |=
-                                self.or_elements_editor(ui, ctx, "or_if", &mut or_elements);
-                            ui.add_space(4.0);
-                            ui.label("视觉匹配阈值");
-                            props_changed |= ui
-                                .add(egui::Slider::new(&mut threshold, 0.5..=0.99).fixed_decimals(2))
-                                .changed();
-                            ui.horizontal(|ui| {
-                                ui.label("重试次数");
-                                props_changed |= ui
-                                    .add(egui::DragValue::new(&mut retries).range(0..=20))
-                                    .changed();
-                            });
-                            ui.horizontal(|ui| {
-                                ui.label("重试间隔(ms)");
-                                props_changed |= ui
-                                    .add(egui::DragValue::new(&mut retry_ms).range(0..=60000))
-                                    .changed();
-                            });
-                            ui.label(
-                                egui::RichText::new(
-                                    "上端口=是(匹配) · 下端口=否(未匹配)\n\
-                                     否接回本节点=未达标重试（不占循环次数）",
-                                )
-                                .color(colors::MUTED),
-                            );
-                            ui.add_space(6.0);
-                            if ui
-                                .button("📷 截屏绑定模板")
-                                .on_hover_text("先隐藏软件窗口，完全隐藏后再截屏框选")
-                                .clicked()
-                            {
-                                request_shot = Some(name.clone());
-                            }
-                            if let Some(n) = self.node_mut(id) {
-                                n.element_name = name;
-                                n.or_elements = or_elements;
-                                n.fallback.clear();
-                                n.threshold = threshold;
-                                n.retries = retries;
-                                n.retry_ms = retry_ms;
-                            }
-                        }
-                        Some(NodeKind::LoopEnd) => {
-                            ui.label(
-                                egui::RichText::new(
-                                    "与「循环开始/条件循环」配对，之间的步骤会重复执行",
-                                )
-                                .color(colors::MUTED),
-                            );
-                        }
-                        Some(NodeKind::Pause) => {
-                            if let Some(node) = self.node_mut(id) {
-                                ui.label("提示消息");
-                                props_changed |=
-                                    ui.text_edit_multiline(&mut node.message).changed();
-                            }
-                        }
-                        Some(NodeKind::Manual) => {
-                            if let Some(node) = self.node_mut(id) {
-                                ui.label("提示消息");
-                                props_changed |=
-                                    ui.text_edit_multiline(&mut node.message).changed();
-                                ui.label("操作说明");
-                                props_changed |=
-                                    ui.text_edit_multiline(&mut node.instruction).changed();
-                            }
-                        }
-                        Some(NodeKind::Start) | Some(NodeKind::End) => {
-                            ui.label(
-                                egui::RichText::new("系统节点，无需配置").color(colors::MUTED),
-                            );
-                        }
-                        None => {}
-                    }
-
-                    if props_changed {
-                        self.begin_prop_session_if_needed(before);
-                    }
-                } else {
-                    ui.label(
-                        egui::RichText::new("选中节点以编辑属性")
-                            .color(colors::MUTED),
-                    );
-                }
-                if let Some(name) = request_shot {
-                    let name = name.trim().to_string();
-                    if name.is_empty() {
-                        self.status = "请先填写元素名再截屏".into();
-                    } else {
-                        self.pending_screenshot = Some(name.clone());
-                        self.status = format!("准备截屏绑定「{}」…", name);
-                    }
-                }
-
-                ui.add_space(16.0);
-                ui.separator();
-                ui.add_space(8.0);
-                ui.label(egui::RichText::new("AI 生成").strong());
-                ui.label(
-                    egui::RichText::new("需在文档页或 Agent 配好 AI（默认 CC Switch :15721）")
-                        .size(10.0)
-                        .color(colors::MUTED),
-                );
-                ui.add_space(4.0);
-                ui.add(
-                    egui::TextEdit::multiline(&mut self.ai_prompt)
-                        .desired_width(f32::INFINITY)
-                        .desired_rows(4)
-                        .hint_text("例：看到登录按钮就点，成功点 10 次"),
-                );
-                ui.add_space(4.0);
-                let ai_busy = self.ai_busy.load(Ordering::Relaxed);
-                ui.add_enabled_ui(!ai_busy, |ui| {
-                    let gen = egui::Button::new(
-                        egui::RichText::new(if ai_busy {
-                            "生成中…"
-                        } else {
-                            "AI 生成流程图"
-                        })
-                        .color(Color32::WHITE)
-                        .strong(),
-                    )
-                    .fill(colors::ACCENT)
-                    .min_size(Vec2::new(198.0, 32.0));
-                    if ui.add(gen).clicked() {
-                        self.request_ai_generate();
-                    }
-                });
-                if ai_busy {
-                    ui.label(
-                        egui::RichText::new("正在请求模型，请稍候…")
-                            .size(11.0)
-                            .color(colors::MUTED),
-                    );
-                }
-
-                ui.add_space(16.0);
-                ui.separator();
-                ui.add_space(8.0);
-                ui.label(egui::RichText::new("文件").strong());
-                ui.add_space(4.0);
-                ui.label("标题（导出 MD）");
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.title)
-                        .desired_width(f32::INFINITY)
-                        .hint_text("视觉成功点击 10 次"),
-                );
-                ui.add_space(2.0);
-                ui.label("说明");
-                ui.add(
-                    egui::TextEdit::multiline(&mut self.description)
-                        .desired_width(f32::INFINITY)
-                        .desired_rows(2)
-                        .hint_text("仅匹配成功才点击…"),
-                );
-                ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    if ui.button("打开").clicked() {
-                        if let Some(path) = rfd::FileDialog::new()
-                            .add_filter("Flow", &["md", "flow.json", "json", "txt"])
-                            .pick_file()
-                        {
-                            let p = path.to_string_lossy().to_string();
-                            match self.load_flow(&p) {
-                                Ok(()) => self.status = format!("已打开 {}", p),
-                                Err(e) => self.status = format!("打开失败: {}", e),
-                            }
-                        }
-                    }
-                    if ui.button("保存").clicked() {
-                        let default = if self.path.is_empty() {
-                            if self.title.trim().is_empty() {
-                                "workflow.md".to_string()
+                        if let Some(id) = self.primary {
+                            let before = self.snapshot();
+                            let multi_hint = if self.selected.len() > 1 {
+                                format!("  (+{})", self.selected.len() - 1)
                             } else {
-                                format!("{}.md", self.title.trim())
+                                String::new()
+                            };
+                            let mut props_changed = false;
+
+                            let kind = self.nodes.iter().find(|n| n.id == id).map(|n| n.kind);
+                            ui.label(format!(
+                                "#{}  {}{}",
+                                id,
+                                kind.map(|k| k.title()).unwrap_or("?"),
+                                multi_hint
+                            ));
+                            ui.add_space(6.0);
+
+                            match kind {
+                                Some(NodeKind::Click) => {
+                                    let mut name = String::new();
+                                    let mut or_elements = Vec::new();
+                                    let mut threshold = 0.85_f32;
+                                    let mut pure_vision = false;
+                                    let mut retries = 0_u32;
+                                    let mut retry_ms = 300_u64;
+                                    let mut on_fail = FailAction::Skip;
+                                    if let Some(n) = self.nodes.iter().find(|n| n.id == id) {
+                                        name = n.element_name.clone();
+                                        or_elements = n.or_elements_for_edit();
+                                        threshold = n.threshold;
+                                        pure_vision = n.pure_vision;
+                                        retries = n.retries;
+                                        retry_ms = n.retry_ms;
+                                        on_fail = n.on_fail;
+                                    }
+                                    ui.label(crate::i18n::t("flow.field.element"));
+                                    props_changed |= self.element_name_picker(
+                                        ui,
+                                        ctx,
+                                        "pick_click",
+                                        &mut name,
+                                        false,
+                                    );
+                                    props_changed |= self.or_elements_editor(
+                                        ui,
+                                        ctx,
+                                        "or_click",
+                                        &mut or_elements,
+                                    );
+                                    ui.add_space(6.0);
+                                    ui.label(crate::i18n::t("flow.field.threshold"));
+                                    props_changed |= ui
+                                        .add(
+                                            egui::Slider::new(&mut threshold, 0.5..=0.99)
+                                                .fixed_decimals(2),
+                                        )
+                                        .changed();
+                                    props_changed |= ui
+                                        .checkbox(&mut pure_vision, crate::i18n::t("flow.field.pure_vision"))
+                                        .changed();
+                                    ui.add_space(4.0);
+                                    ui.horizontal(|ui| {
+                                        ui.label(crate::i18n::t("flow.field.retries"));
+                                        props_changed |= ui
+                                            .add(egui::DragValue::new(&mut retries).range(0..=20))
+                                            .changed();
+                                    });
+                                    ui.horizontal(|ui| {
+                                        ui.label(crate::i18n::t("flow.field.retry_ms"));
+                                        props_changed |= ui
+                                            .add(
+                                                egui::DragValue::new(&mut retry_ms)
+                                                    .range(0..=60000),
+                                            )
+                                            .changed();
+                                    });
+                                    ui.horizontal(|ui| {
+                                        ui.label(crate::i18n::t("flow.field.on_fail"));
+                                        let prev = on_fail;
+                                        egui::ComboBox::from_id_salt("on_fail")
+                                            .selected_text(match on_fail {
+                                                FailAction::Skip => crate::i18n::t("flow.fail.skip"),
+                                                FailAction::Abort => crate::i18n::t("flow.fail.abort"),
+                                            })
+                                            .show_ui(ui, |ui| {
+                                                ui.selectable_value(
+                                                    &mut on_fail,
+                                                    FailAction::Skip,
+                                                    crate::i18n::t("flow.fail.skip"),
+                                                );
+                                                ui.selectable_value(
+                                                    &mut on_fail,
+                                                    FailAction::Abort,
+                                                    crate::i18n::t("flow.fail.abort"),
+                                                );
+                                            });
+                                        if on_fail != prev {
+                                            props_changed = true;
+                                        }
+                                    });
+                                    ui.add_space(6.0);
+                                    if ui
+                                        .button(crate::i18n::t("flow.btn.shot"))
+                                        .on_hover_text("先隐藏软件窗口，完全隐藏后再截屏框选")
+                                        .clicked()
+                                    {
+                                        request_shot = Some(name.clone());
+                                    }
+                                    if let Some(n) = self.node_mut(id) {
+                                        n.element_name = name;
+                                        n.or_elements = or_elements;
+                                        n.fallback.clear();
+                                        n.threshold = threshold;
+                                        n.pure_vision = pure_vision;
+                                        n.retries = retries;
+                                        n.retry_ms = retry_ms;
+                                        n.on_fail = on_fail;
+                                    }
+                                }
+                                Some(NodeKind::Wait) => {
+                                    if let Some(node) = self.node_mut(id) {
+                                        ui.label(crate::i18n::t("flow.field.seconds"));
+                                        props_changed |= ui
+                                            .add(
+                                                egui::DragValue::new(&mut node.seconds)
+                                                    .range(1..=3600),
+                                            )
+                                            .changed();
+                                    }
+                                }
+                                Some(NodeKind::TypeText) => {
+                                    let mut text = String::new();
+                                    let mut interval = 30_u64;
+                                    if let Some(n) = self.nodes.iter().find(|n| n.id == id) {
+                                        text = n.type_text.clone();
+                                        interval = n.type_interval_ms;
+                                    }
+                                    ui.label(crate::i18n::t("flow.field.type_text"));
+                                    props_changed |= ui
+                                        .add(
+                                            egui::TextEdit::multiline(&mut text)
+                                                .desired_width(f32::INFINITY)
+                                                .desired_rows(3)
+                                                .hint_text("文字或 {Enter} {Tab} {Ctrl+V}"),
+                                        )
+                                        .changed();
+                                    ui.add_space(4.0);
+                                    ui.horizontal(|ui| {
+                                        ui.label(crate::i18n::t("flow.field.type_ms"));
+                                        props_changed |= ui
+                                            .add(
+                                                egui::DragValue::new(&mut interval).range(0..=2000),
+                                            )
+                                            .changed();
+                                    });
+                                    ui.label(
+                                        egui::RichText::new(
+                                            "支持中文；特殊键：{Enter} {Tab} {Esc} {Backspace}\n\
+                                     {Ctrl+A/C/V/X/Z}；字面量大括号写 {{ }}",
+                                        )
+                                        .color(col().MUTED)
+                                        .size(11.0),
+                                    );
+                                    if let Some(n) = self.node_mut(id) {
+                                        n.type_text = text;
+                                        n.type_interval_ms = interval;
+                                    }
+                                }
+                                Some(NodeKind::LoopStart) => {
+                                    if let Some(node) = self.node_mut(id) {
+                                        ui.label(crate::i18n::t("flow.field.loop_times"));
+                                        props_changed |= ui
+                                            .add(
+                                                egui::DragValue::new(&mut node.seconds)
+                                                    .range(1..=9999),
+                                            )
+                                            .changed();
+                                    }
+                                }
+                                Some(NodeKind::LoopWhile) => {
+                                    let mut name = String::new();
+                                    let mut or_elements = Vec::new();
+                                    let mut threshold = 0.85_f32;
+                                    let mut retries = 0_u32;
+                                    let mut retry_ms = 300_u64;
+                                    let mut max_times = 10_u32;
+                                    if let Some(n) = self.nodes.iter().find(|n| n.id == id) {
+                                        name = n.element_name.clone();
+                                        or_elements = n.or_elements_for_edit();
+                                        threshold = n.threshold;
+                                        retries = n.retries;
+                                        retry_ms = n.retry_ms;
+                                        max_times = n.max_times;
+                                    }
+                                    ui.label("元素（匹配则继续）");
+                                    props_changed |= self.element_name_picker(
+                                        ui,
+                                        ctx,
+                                        "pick_while",
+                                        &mut name,
+                                        false,
+                                    );
+                                    props_changed |= self.or_elements_editor(
+                                        ui,
+                                        ctx,
+                                        "or_while",
+                                        &mut or_elements,
+                                    );
+                                    ui.add_space(4.0);
+                                    ui.label(crate::i18n::t("flow.field.threshold"));
+                                    props_changed |= ui
+                                        .add(
+                                            egui::Slider::new(&mut threshold, 0.5..=0.99)
+                                                .fixed_decimals(2),
+                                        )
+                                        .changed();
+                                    ui.horizontal(|ui| {
+                                        ui.label(crate::i18n::t("flow.field.retries"));
+                                        props_changed |= ui
+                                            .add(egui::DragValue::new(&mut retries).range(0..=20))
+                                            .changed();
+                                    });
+                                    ui.horizontal(|ui| {
+                                        ui.label(crate::i18n::t("flow.field.retry_ms"));
+                                        props_changed |= ui
+                                            .add(
+                                                egui::DragValue::new(&mut retry_ms)
+                                                    .range(0..=60000),
+                                            )
+                                            .changed();
+                                    });
+                                    ui.horizontal(|ui| {
+                                        ui.label(crate::i18n::t("flow.field.max_times"));
+                                        props_changed |= ui
+                                            .add(
+                                                egui::DragValue::new(&mut max_times)
+                                                    .range(1..=9999),
+                                            )
+                                            .changed();
+                                    });
+                                    ui.label(
+                                        egui::RichText::new(
+                                            "与「循环结束」配对；匹配失败或达上限则退出",
+                                        )
+                                        .color(col().MUTED),
+                                    );
+                                    ui.add_space(6.0);
+                                    if ui
+                                        .button(crate::i18n::t("flow.btn.shot"))
+                                        .on_hover_text("先隐藏软件窗口，完全隐藏后再截屏框选")
+                                        .clicked()
+                                    {
+                                        request_shot = Some(name.clone());
+                                    }
+                                    if let Some(n) = self.node_mut(id) {
+                                        n.element_name = name;
+                                        n.or_elements = or_elements;
+                                        n.fallback.clear();
+                                        n.threshold = threshold;
+                                        n.retries = retries;
+                                        n.retry_ms = retry_ms;
+                                        n.max_times = max_times;
+                                    }
+                                }
+                                Some(NodeKind::IfVision) => {
+                                    let mut name = String::new();
+                                    let mut or_elements = Vec::new();
+                                    let mut threshold = 0.85_f32;
+                                    let mut retries = 0_u32;
+                                    let mut retry_ms = 300_u64;
+                                    if let Some(n) = self.nodes.iter().find(|n| n.id == id) {
+                                        name = n.element_name.clone();
+                                        or_elements = n.or_elements_for_edit();
+                                        threshold = n.threshold;
+                                        retries = n.retries;
+                                        retry_ms = n.retry_ms;
+                                    }
+                                    ui.label("元素（只判断不点击）");
+                                    props_changed |= self
+                                        .element_name_picker(ui, ctx, "pick_if", &mut name, false);
+                                    props_changed |=
+                                        self.or_elements_editor(ui, ctx, "or_if", &mut or_elements);
+                                    ui.add_space(4.0);
+                                    ui.label(crate::i18n::t("flow.field.threshold"));
+                                    props_changed |= ui
+                                        .add(
+                                            egui::Slider::new(&mut threshold, 0.5..=0.99)
+                                                .fixed_decimals(2),
+                                        )
+                                        .changed();
+                                    ui.horizontal(|ui| {
+                                        ui.label(crate::i18n::t("flow.field.retries"));
+                                        props_changed |= ui
+                                            .add(egui::DragValue::new(&mut retries).range(0..=20))
+                                            .changed();
+                                    });
+                                    ui.horizontal(|ui| {
+                                        ui.label(crate::i18n::t("flow.field.retry_ms"));
+                                        props_changed |= ui
+                                            .add(
+                                                egui::DragValue::new(&mut retry_ms)
+                                                    .range(0..=60000),
+                                            )
+                                            .changed();
+                                    });
+                                    ui.label(
+                                        egui::RichText::new(
+                                            "上端口=是(匹配) · 下端口=否(未匹配)\n\
+                                     否接回本节点=未达标重试（不占循环次数）",
+                                        )
+                                        .color(col().MUTED),
+                                    );
+                                    ui.add_space(6.0);
+                                    if ui
+                                        .button(crate::i18n::t("flow.btn.shot"))
+                                        .on_hover_text("先隐藏软件窗口，完全隐藏后再截屏框选")
+                                        .clicked()
+                                    {
+                                        request_shot = Some(name.clone());
+                                    }
+                                    if let Some(n) = self.node_mut(id) {
+                                        n.element_name = name;
+                                        n.or_elements = or_elements;
+                                        n.fallback.clear();
+                                        n.threshold = threshold;
+                                        n.retries = retries;
+                                        n.retry_ms = retry_ms;
+                                    }
+                                }
+                                Some(NodeKind::LoopEnd) => {
+                                    ui.label(
+                                        egui::RichText::new(
+                                            "与「循环开始/条件循环」配对，之间的步骤会重复执行",
+                                        )
+                                        .color(col().MUTED),
+                                    );
+                                }
+                                Some(NodeKind::Pause) => {
+                                    if let Some(node) = self.node_mut(id) {
+                                        ui.label(crate::i18n::t("flow.field.message"));
+                                        props_changed |=
+                                            ui.text_edit_multiline(&mut node.message).changed();
+                                    }
+                                }
+                                Some(NodeKind::Manual) => {
+                                    if let Some(node) = self.node_mut(id) {
+                                        ui.label(crate::i18n::t("flow.field.message"));
+                                        props_changed |=
+                                            ui.text_edit_multiline(&mut node.message).changed();
+                                        ui.label(crate::i18n::t("flow.field.instruction"));
+                                        props_changed |=
+                                            ui.text_edit_multiline(&mut node.instruction).changed();
+                                    }
+                                }
+                                Some(NodeKind::Start) | Some(NodeKind::End) => {
+                                    ui.label(
+                                        egui::RichText::new(crate::i18n::t("flow.inspector.system"))
+                                            .color(col().MUTED),
+                                    );
+                                }
+                                None => {}
+                            }
+
+                            if props_changed {
+                                self.begin_prop_session_if_needed(before);
                             }
                         } else {
-                            self.path.clone()
-                        };
-                        if let Some(path) = rfd::FileDialog::new()
-                            .add_filter("Markdown Flow", &["md"])
-                            .add_filter("Flow JSON", &["flow.json", "json"])
-                            .set_file_name(&default)
-                            .save_file()
-                        {
-                            let p = path.to_string_lossy().to_string();
-                            match self.save_flow(&p) {
-                                Ok(()) => self.status = format!("已保存 {}", p),
-                                Err(e) => self.status = format!("保存失败: {}", e),
+                            ui.label(
+                                egui::RichText::new(crate::i18n::t("flow.inspector.select")).color(col().MUTED),
+                            );
+                        }
+                        if let Some(name) = request_shot {
+                            let name = name.trim().to_string();
+                            if name.is_empty() {
+                                self.status = "请先填写元素名再截屏".into();
+                            } else {
+                                self.pending_screenshot = Some(name.clone());
+                                self.status = format!("准备截屏绑定「{}」…", name);
                             }
                         }
-                    }
-                });
-                if ui
-                    .button("加载示例：视觉点击×10")
-                    .on_hover_text("成功匹配才点击，共 10 次；未达标重试不占次数")
-                    .clicked()
-                {
-                    match self.load_example_vision_click_10() {
-                        Ok(()) => self.status = "已加载示例：视觉成功点击 10 次".into(),
-                        Err(e) => self.status = format!("加载示例失败: {e}"),
-                    }
-                }
-                ui.add_space(8.0);
-                let run = egui::Button::new(
-                    egui::RichText::new("▶  运行流程").color(Color32::WHITE).strong(),
-                )
-                .fill(colors::ACCENT)
-                .stroke(egui::Stroke::NONE)
-                .min_size(Vec2::new(198.0, 38.0));
-                if ui.add(run).clicked() {
-                    match self.compile_steps() {
-                        Ok(steps) => {
-                            self.status = format!("开始执行 {} 步…", steps.len());
-                            self.pending_run = Some(steps);
+
+                        ui.add_space(16.0);
+                        ui.separator();
+                        ui.add_space(8.0);
+                        ui.label(egui::RichText::new(crate::i18n::t("flow.section.file")).strong());
+                        ui.add_space(4.0);
+                        ui.label(crate::i18n::t("flow.field.title"));
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.title)
+                                .desired_width(f32::INFINITY)
+                                .hint_text("视觉成功点击 10 次"),
+                        );
+                        ui.add_space(2.0);
+                        ui.label(crate::i18n::t("flow.field.desc"));
+                        ui.add(
+                            egui::TextEdit::multiline(&mut self.description)
+                                .desired_width(f32::INFINITY)
+                                .desired_rows(2)
+                                .hint_text("仅匹配成功才点击…"),
+                        );
+                        ui.add_space(4.0);
+                        ui.horizontal(|ui| {
+                            if ui.button(crate::i18n::t("flow.btn.open")).clicked() {
+                                if let Some(path) = rfd::FileDialog::new()
+                                    .add_filter("Flow", &["md", "flow.json", "json", "txt"])
+                                    .pick_file()
+                                {
+                                    let p = path.to_string_lossy().to_string();
+                                    match self.load_flow(&p) {
+                                        Ok(()) => self.status = format!("已打开 {}", p),
+                                        Err(e) => self.status = format!("打开失败: {}", e),
+                                    }
+                                }
+                            }
+                            if ui.button(crate::i18n::t("flow.btn.save")).clicked() {
+                                let default = if self.path.is_empty() {
+                                    if self.title.trim().is_empty() {
+                                        "workflow.md".to_string()
+                                    } else {
+                                        format!("{}.md", self.title.trim())
+                                    }
+                                } else {
+                                    self.path.clone()
+                                };
+                                if let Some(path) = rfd::FileDialog::new()
+                                    .add_filter("Markdown Flow", &["md"])
+                                    .add_filter("Flow JSON", &["flow.json", "json"])
+                                    .set_file_name(&default)
+                                    .save_file()
+                                {
+                                    let p = path.to_string_lossy().to_string();
+                                    match self.save_flow(&p) {
+                                        Ok(()) => self.status = format!("已保存 {}", p),
+                                        Err(e) => self.status = format!("保存失败: {}", e),
+                                    }
+                                }
+                            }
+                        });
+                        if ui
+                            .button(crate::i18n::t("flow.btn.example"))
+                            .on_hover_text("成功匹配才点击，共 10 次；未达标重试不占次数")
+                            .clicked()
+                        {
+                            match self.load_example_vision_click_10() {
+                                Ok(()) => self.status = "已加载示例：视觉成功点击 10 次".into(),
+                                Err(e) => self.status = format!("加载示例失败: {e}"),
+                            }
                         }
-                        Err(e) => self.status = format!("无法运行: {}", e),
-                    }
-                }
+                        ui.add_space(8.0);
+                        let run = egui::Button::new(
+                            egui::RichText::new(crate::i18n::t("flow.btn.run"))
+                                .color(Color32::WHITE)
+                                .strong(),
+                        )
+                        .fill(col().ACCENT)
+                        .stroke(egui::Stroke::NONE)
+                        .min_size(Vec2::new(ui.available_width().max(120.0), CTRL_H + 4.0));
+                        if ui.add(run).clicked() {
+                            match self.compile_steps() {
+                                Ok(steps) => {
+                                    self.status = format!("开始执行 {} 步…", steps.len());
+                                    self.pending_run = Some(steps);
+                                }
+                                Err(e) => self.status = format!("无法运行: {}", e),
+                            }
+                        }
+                    }); // ScrollArea
             });
 
         egui::TopBottomPanel::bottom("flow_status").show(ctx, |ui| {
@@ -2383,20 +2462,20 @@ impl FlowEditor {
                 ui.label(
                     egui::RichText::new(&self.status)
                         .size(12.0)
-                        .color(colors::MUTED),
+                        .color(col().MUTED),
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(
-                        egui::RichText::new("空白拖平移 · Ctrl+拖框选 · Ctrl+Z/Y · Ctrl+L 布局")
+                        egui::RichText::new(crate::i18n::t("flow.canvas.hints"))
                             .size(11.0)
-                            .color(colors::MUTED),
+                            .color(col().MUTED),
                     );
                 });
             });
         });
 
         egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(colors::CANVAS))
+            .frame(egui::Frame::none().fill(col().CANVAS))
             .show(ctx, |ui| {
                 self.draw_canvas(ui);
             });
@@ -2442,7 +2521,7 @@ impl FlowEditor {
         while x < canvas.right() {
             painter.line_segment(
                 [Pos2::new(x, canvas.top()), Pos2::new(x, canvas.bottom())],
-                Stroke::new(1.0, colors::GRID),
+                Stroke::new(1.0, col().GRID),
             );
             x += grid;
         }
@@ -2450,7 +2529,7 @@ impl FlowEditor {
         while y < canvas.bottom() {
             painter.line_segment(
                 [Pos2::new(canvas.left(), y), Pos2::new(canvas.right(), y)],
-                Stroke::new(1.0, colors::GRID),
+                Stroke::new(1.0, col().GRID),
             );
             y += grid;
         }
@@ -2471,7 +2550,7 @@ impl FlowEditor {
             let color = match e.branch {
                 EdgeBranch::True => Color32::from_rgb(52, 211, 153),
                 EdgeBranch::False => Color32::from_rgb(251, 113, 133),
-                EdgeBranch::Main => colors::WIRE,
+                EdgeBranch::Main => col().WIRE,
             };
             draw_bezier(&painter, p0, p1, color, 2.0);
         }
@@ -2481,7 +2560,7 @@ impl FlowEditor {
             if let Some(a) = self.nodes.iter().find(|n| n.id == from) {
                 let p0 = to_screen(a.out_port_for(branch), self.pan);
                 let p1 = self.last_pointer;
-                draw_bezier(&painter, p0, p1, colors::ACCENT_DIM, 2.0);
+                draw_bezier(&painter, p0, p1, col().ACCENT_DIM, 2.0);
             }
         }
 
@@ -2646,7 +2725,7 @@ impl FlowEditor {
         if let (Some(a), Some(b)) = (self.marquee_a, self.marquee_b) {
             let r = Rect::from_two_pos(a, b);
             painter.rect_filled(r, 0.0, Color32::from_rgba_unmultiplied(45, 212, 191, 40));
-            painter.rect_stroke(r, 0.0, Stroke::new(1.0, colors::ACCENT_DIM));
+            painter.rect_stroke(r, 0.0, Stroke::new(1.0, col().ACCENT_DIM));
         }
 
         // Draw nodes
@@ -2663,7 +2742,7 @@ impl FlowEditor {
                     Color32::from_rgba_unmultiplied(250, 204, 21, 40),
                 );
             }
-            painter.rect_filled(r, 8.0, colors::NODE_BG);
+            painter.rect_filled(r, 8.0, col().NODE_BG);
             painter.rect_stroke(
                 r,
                 8.0,
@@ -2678,20 +2757,20 @@ impl FlowEditor {
                     if running_here {
                         Color32::from_rgb(250, 204, 21)
                     } else if selected_here {
-                        colors::NODE_SEL
+                        col().NODE_SEL
                     } else {
                         accent
                     },
                 ),
             );
             // Top accent bar
-            let bar = Rect::from_min_max(
-                r.min,
-                Pos2::new(r.max.x, r.min.y + 6.0),
-            );
+            let bar = Rect::from_min_max(r.min, Pos2::new(r.max.x, r.min.y + 6.0));
             painter.rect_filled(bar, 8.0, accent);
             painter.rect_filled(
-                Rect::from_min_max(Pos2::new(r.min.x, r.min.y + 3.0), Pos2::new(r.max.x, r.min.y + 6.0)),
+                Rect::from_min_max(
+                    Pos2::new(r.min.x, r.min.y + 3.0),
+                    Pos2::new(r.max.x, r.min.y + 6.0),
+                ),
                 0.0,
                 accent,
             );
@@ -2714,7 +2793,7 @@ impl FlowEditor {
             // Ports
             if n.kind != NodeKind::Start {
                 let c = to_screen(n.in_port(), self.pan);
-                painter.circle_filled(c, PORT_R, colors::CANVAS);
+                painter.circle_filled(c, PORT_R, col().CANVAS);
                 painter.circle_stroke(c, PORT_R, Stroke::new(2.0, accent));
             }
             if n.kind == NodeKind::IfVision {
@@ -2725,7 +2804,7 @@ impl FlowEditor {
                 painter.text(
                     Pos2::new(t.x + 12.0, t.y),
                     egui::Align2::LEFT_CENTER,
-                    "是",
+                    crate::i18n::t("flow.branch.yes"),
                     FontId::proportional(10.0),
                     Color32::from_rgb(52, 211, 153),
                 );
@@ -2734,7 +2813,7 @@ impl FlowEditor {
                 painter.text(
                     Pos2::new(f.x + 12.0, f.y),
                     egui::Align2::LEFT_CENTER,
-                    "否",
+                    crate::i18n::t("flow.branch.no"),
                     FontId::proportional(10.0),
                     Color32::from_rgb(251, 113, 133),
                 );
@@ -2767,7 +2846,7 @@ impl FlowEditor {
                 egui::Align2::LEFT_TOP,
                 "● 执行中",
                 FontId::proportional(12.0),
-                colors::NODE_SEL,
+                col().NODE_SEL,
             );
         }
     }
@@ -2787,18 +2866,20 @@ impl FlowEditor {
             egui::RichText::new("OR 候选（任一匹配即可）")
                 .size(12.0)
                 .strong()
-                .color(colors::TEXT),
+                .color(col().TEXT),
         );
         ui.label(
             egui::RichText::new("多张图任一张识别到都算成功")
                 .size(10.0)
-                .color(colors::MUTED),
+                .color(col().MUTED),
         );
         ui.add_space(4.0);
         let add = egui::Button::new(
-            egui::RichText::new("＋ OR 添加图片").color(Color32::WHITE).strong(),
+            egui::RichText::new("＋ OR 添加图片")
+                .color(Color32::WHITE)
+                .strong(),
         )
-        .fill(colors::ACCENT)
+        .fill(col().ACCENT)
         .min_size(Vec2::new(ui.available_width(), 28.0));
         if ui
             .add(add)
@@ -2816,10 +2897,14 @@ impl FlowEditor {
                 ui.label(
                     egui::RichText::new(format!("OR{}", i + 1))
                         .size(11.0)
-                        .color(colors::MUTED),
+                        .color(col().MUTED),
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.small_button("删除").on_hover_text("移除此候选").clicked() {
+                    if ui
+                        .small_button("删除")
+                        .on_hover_text("移除此候选")
+                        .clicked()
+                    {
                         remove_at = Some(i);
                     }
                 });
@@ -2869,7 +2954,7 @@ impl FlowEditor {
                     ui.label(
                         egui::RichText::new("请先在「录制」页添加模板")
                             .size(12.0)
-                            .color(colors::MUTED),
+                            .color(col().MUTED),
                     );
                 } else {
                     for item in &catalog {
@@ -2912,7 +2997,11 @@ impl FlowEditor {
             if let Some(tex) = self.catalog_tex.get(value.as_str()) {
                 let size = tex.size_vec2();
                 let s = (72.0 / size.x).min(48.0 / size.y).min(1.0);
-                ui.add(egui::Image::new(tex).fit_to_exact_size(size * s).rounding(6.0));
+                ui.add(
+                    egui::Image::new(tex)
+                        .fit_to_exact_size(size * s)
+                        .rounding(6.0),
+                );
             }
         }
 
@@ -2921,7 +3010,7 @@ impl FlowEditor {
                 self.ensure_catalog_tex(ctx, &item.name, &item.preview_path);
             }
             egui::Frame::none()
-                .fill(colors::INSET)
+                .fill(col().INSET)
                 .rounding(egui::Rounding::same(10.0))
                 .inner_margin(egui::Margin::same(8.0))
                 .show(ui, |ui| {
@@ -2937,7 +3026,7 @@ impl FlowEditor {
                         ui.label(
                             egui::RichText::new("元素库为空，请先在「录制」页添加")
                                 .size(12.0)
-                                .color(colors::MUTED),
+                                .color(col().MUTED),
                         );
                     }
                     egui::ScrollArea::vertical().show(ui, |ui| {
@@ -2953,14 +3042,14 @@ impl FlowEditor {
                                         .fill(if selected {
                                             Color32::from_rgb(224, 236, 255)
                                         } else {
-                                            colors::PANEL_ELEVATED
+                                            col().PANEL_ELEVATED
                                         })
                                         .stroke(Stroke::new(
                                             1.0,
                                             if selected {
-                                                colors::ACCENT
+                                                col().ACCENT
                                             } else {
-                                                colors::PANEL_EDGE
+                                                col().PANEL_EDGE
                                             },
                                         ))
                                         .rounding(egui::Rounding::same(8.0))
@@ -2970,7 +3059,7 @@ impl FlowEditor {
                                             let thumb = egui::vec2(72.0, 48.0);
                                             let (rect, _) =
                                                 ui.allocate_exact_size(thumb, Sense::hover());
-                                            ui.painter().rect_filled(rect, 6.0, colors::INSET);
+                                            ui.painter().rect_filled(rect, 6.0, col().INSET);
                                             if let Some(tex) = tex {
                                                 let size = tex.size_vec2();
                                                 let s = (thumb.x / size.x)
@@ -2995,7 +3084,7 @@ impl FlowEditor {
                                                 egui::RichText::new(&item.name)
                                                     .size(12.0)
                                                     .strong()
-                                                    .color(colors::TEXT),
+                                                    .color(col().TEXT),
                                             );
                                         });
                                     if ui
@@ -3046,11 +3135,7 @@ fn draw_bezier(painter: &egui::Painter, p0: Pos2, p1: Pos2, color: Color32, widt
     painter.line_segment([tip, base - orth * 5.0], Stroke::new(width, color));
 }
 
-fn load_flow_thumb(
-    ctx: &egui::Context,
-    path: &str,
-    name: &str,
-) -> Option<egui::TextureHandle> {
+fn load_flow_thumb(ctx: &egui::Context, path: &str, name: &str) -> Option<egui::TextureHandle> {
     let img = image::open(path).ok()?.into_rgba8();
     let (w, h) = (img.width(), img.height());
     let max_side = 128u32;

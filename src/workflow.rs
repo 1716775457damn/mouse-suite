@@ -154,8 +154,8 @@ impl WorkflowStep {
 }
 
 pub fn parse_workflow_file(path: &str) -> Result<Vec<WorkflowStep>, String> {
-    let content =
-        std::fs::read_to_string(path).map_err(|e| format!("Failed to read workflow file: {}", e))?;
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| format!("Failed to read workflow file: {}", e))?;
     parse_workflow_text(&content)
 }
 
@@ -380,10 +380,7 @@ pub fn steps_to_text(steps: &[WorkflowStep]) -> String {
                 instruction,
             } => {
                 if let Some(inst) = instruction {
-                    out.push_str(&format!(
-                        "manual: {} | instruction={}\n",
-                        message, inst
-                    ));
+                    out.push_str(&format!("manual: {} | instruction={}\n", message, inst));
                 } else {
                     out.push_str(&format!("manual: {}\n", message));
                 }
@@ -399,10 +396,8 @@ pub fn steps_to_text(steps: &[WorkflowStep]) -> String {
                 retry_ms,
                 max_times,
             } => {
-                let mut line = format!(
-                    "loop_while: {}",
-                    format_or_names(element_name, or_elements)
-                );
+                let mut line =
+                    format!("loop_while: {}", format_or_names(element_name, or_elements));
                 if let Some(t) = threshold {
                     line.push_str(&format!(" | threshold={}", t));
                 }
@@ -428,10 +423,7 @@ pub fn steps_to_text(steps: &[WorkflowStep]) -> String {
                 then_jump,
                 else_jump,
             } => {
-                let mut line = format!(
-                    "if_vision: {}",
-                    format_or_names(element_name, or_elements)
-                );
+                let mut line = format!("if_vision: {}", format_or_names(element_name, or_elements));
                 if let Some(t) = threshold {
                     line.push_str(&format!(" | threshold={}", t));
                 }
@@ -674,7 +666,11 @@ pub fn parse_steps_json(value: &Value) -> Result<Vec<WorkflowStep>, String> {
 
 fn json_or_elements(obj: &serde_json::Map<String, Value>) -> Vec<String> {
     let mut out = Vec::new();
-    if let Some(arr) = obj.get("or").or_else(|| obj.get("or_elements")).and_then(|v| v.as_array()) {
+    if let Some(arr) = obj
+        .get("or")
+        .or_else(|| obj.get("or_elements"))
+        .and_then(|v| v.as_array())
+    {
         for v in arr {
             if let Some(s) = v.as_str() {
                 let t = s.trim();
