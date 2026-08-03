@@ -919,16 +919,31 @@ impl eframe::App for SuiteApp {
     }
 }
 
+fn load_app_icon() -> Option<egui::IconData> {
+    let bytes = include_bytes!("../packaging/macos/AppIcon-256.png");
+    let img = image::load_from_memory(bytes).ok()?.into_rgba8();
+    let (w, h) = img.dimensions();
+    Some(egui::IconData {
+        rgba: img.into_raw(),
+        width: w,
+        height: h,
+    })
+}
+
 fn main() -> eframe::Result {
     setup_panic_hook();
     screen::enable_dpi_awareness();
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_inner_size([960.0, 640.0])
+        .with_min_inner_size([720.0, 480.0])
+        .with_decorations(false)
+        .with_resizable(true)
+        .with_title("Mouse Suite");
+    if let Some(icon) = load_app_icon() {
+        viewport = viewport.with_icon(icon);
+    }
     let opts = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([960.0, 640.0])
-            .with_min_inner_size([720.0, 480.0])
-            .with_decorations(false)
-            .with_resizable(true)
-            .with_title("Mouse Suite"),
+        viewport,
         ..Default::default()
     };
     eframe::run_native(

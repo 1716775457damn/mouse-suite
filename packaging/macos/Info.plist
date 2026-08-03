@@ -8,6 +8,8 @@
 	<string>Mouse Suite</string>
 	<key>CFBundleExecutable</key>
 	<string>mouse-suite</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.mousesuite.app</string>
 	<key>CFBundleInfoDictionaryVersion</key>
@@ -26,5 +28,9 @@
 	<true/>
 	<key>NSSupportsAutomaticGraphicsSwitching</key>
 	<true/>
+	<key>NSScreenCaptureUsageDescription</key>
+	<string>Mouse Suite captures screen regions for element recording and template matching.</string>
+	<key>NSAccessibilityUsageDescription</key>
+	<string>Mouse Suite may use Accessibility access to observe mouse clicks for recording workflows.</string>
 </dict>
 </plist>

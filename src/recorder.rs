@@ -85,11 +85,11 @@ fn load_element_thumb(ctx: &egui::Context, path: &str, id: i32) -> Option<egui::
 
 fn init_db(path: &str) -> Connection {
     if let Some(parent) = std::path::Path::new(path).parent() {
-        fs::create_dir_all(parent).expect("Failed to create DB directory");
+        if let Err(e) = fs::create_dir_all(parent) {
+            log_error(&format!("Failed to create DB directory {}: {e}", parent.display()));
+        }
     }
-    let conn = Connection::open(path).expect("Failed to open DB");
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS elements (
+    let schema = "CREATE TABLE IF NOT EXISTS elements (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
             center_x INTEGER NOT NULL, center_y INTEGER NOT NULL,
@@ -105,10 +105,25 @@ fn init_db(path: &str) -> Connection {
             is_primary BOOLEAN NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL,
             FOREIGN KEY (element_id) REFERENCES elements(id)
-        );",
-    )
-    .expect("Fail DB init");
-    conn
+        );";
+    match Connection::open(path) {
+        Ok(conn) => {
+            if let Err(e) = conn.execute_batch(schema) {
+                log_error(&format!("DB schema init failed: {e}"));
+            }
+            conn
+        }
+        Err(e) => {
+            log_error(&format!(
+                "Failed to open DB at {path}: {e}; falling back to in-memory"
+            ));
+            let conn = Connection::open_in_memory().unwrap_or_else(|e2| {
+                panic!("SQLite unavailable (disk and memory failed): {e2}");
+            });
+            let _ = conn.execute_batch(schema);
+            conn
+        }
+    }
 }
 
 #[derive(Clone)]

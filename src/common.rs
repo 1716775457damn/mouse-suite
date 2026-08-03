@@ -11,9 +11,66 @@ pub fn exe_dir() -> &'static Path {
     })
 }
 
+/// Writable app data (never inside a macOS .app bundle).
+///
+/// - Windows portable: `{exe_dir}/data`
+/// - macOS: `~/Library/Application Support/Mouse Suite`
+/// - Linux: `$XDG_DATA_HOME/mouse-suite` or `~/.local/share/mouse-suite`
 pub fn data_dir() -> &'static Path {
     static DIR: OnceLock<PathBuf> = OnceLock::new();
-    DIR.get_or_init(|| exe_dir().join("data"))
+    DIR.get_or_init(|| {
+        let dir = platform_data_dir();
+        let _ = std::fs::create_dir_all(&dir);
+        dir
+    })
+}
+
+fn platform_data_dir() -> PathBuf {
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(home) = std::env::var_os("HOME") {
+            return PathBuf::from(home)
+                .join("Library")
+                .join("Application Support")
+                .join("Mouse Suite");
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
+            if !xdg.is_empty() {
+                return PathBuf::from(xdg).join("mouse-suite");
+            }
+        }
+        if let Some(home) = std::env::var_os("HOME") {
+            return PathBuf::from(home)
+                .join(".local")
+                .join("share")
+                .join("mouse-suite");
+        }
+    }
+    // Windows (and fallback): portable next to the executable.
+    exe_dir().join("data")
+}
+
+fn config_file_path() -> PathBuf {
+    data_dir().join("config.toml")
+}
+
+/// Bundled / sideloaded default config locations (read-only OK).
+fn bundled_config_candidates() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    // Next to exe (portable / Windows)
+    paths.push(exe_dir().join("config.toml"));
+    // macOS app Resources
+    #[cfg(target_os = "macos")]
+    {
+        // .../Contents/MacOS -> .../Contents/Resources/config.toml
+        if let Some(contents) = exe_dir().parent() {
+            paths.push(contents.join("Resources").join("config.toml"));
+        }
+    }
+    paths
 }
 
 /// Shared element library entry (recorder gallery + flow picker).
@@ -53,19 +110,26 @@ fn default_theme() -> String {
 
 impl Config {
     pub fn load() -> Self {
-        let config_path = exe_dir().join("config.toml");
-        std::fs::read_to_string(&config_path)
-            .ok()
-            .and_then(|content| toml::from_str(&content).ok())
-            .unwrap_or_default()
+        // Prefer writable user config; fall back to bundled defaults.
+        let mut candidates = vec![config_file_path()];
+        candidates.extend(bundled_config_candidates());
+        for path in candidates {
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                if let Ok(cfg) = toml::from_str(&content) {
+                    return cfg;
+                }
+            }
+        }
+        Self::default()
     }
 
     pub fn save(&self) {
-        let config_path = exe_dir().join("config.toml");
+        let _ = std::fs::create_dir_all(data_dir());
+        let config_path = config_file_path();
         let mut doc = String::from(
-            "# Paths relative to the executable directory, or absolute paths.\n\
-             # db_path = \"data/mouse_recorder.db\"\n\
-             # image_dir = \"data\"\n\
+            "# Paths relative to the data directory, or absolute paths.\n\
+             # db_path = \"mouse_recorder.db\"\n\
+             # image_dir = \".\"\n\
              # language = \"zh\" | \"en\"\n\
              # theme = \"light\" | \"dark\"\n",
         );
@@ -89,7 +153,8 @@ impl Config {
         if p.is_absolute() {
             p.to_path_buf()
         } else {
-            exe_dir().join(p)
+            // Relative paths resolve against writable data dir (not the .app bundle).
+            data_dir().join(p)
         }
     }
 
@@ -132,12 +197,21 @@ impl Default for Config {
 pub fn setup_chinese_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
 
-    // Prefer clean CJK + SF-like Latin pairing on Windows.
+    // Prefer clean CJK + SF-like Latin pairing.
     let cn_candidates = [
+        // macOS
+        "/System/Library/Fonts/PingFang.ttc",
+        "/System/Library/Fonts/Hiragino Sans GB.ttc",
+        "/Library/Fonts/Arial Unicode.ttf",
+        // Windows
         "C:\\Windows\\Fonts\\msyh.ttc",
         "C:\\Windows\\Fonts\\msyhbd.ttc",
         "C:\\Windows\\Fonts\\simhei.ttf",
         "C:\\Windows\\Fonts\\simsun.ttc",
+        // Linux
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
     ];
     for path in &cn_candidates {
         if let Ok(data) = std::fs::read(path) {
@@ -165,6 +239,9 @@ pub fn setup_chinese_fonts(ctx: &egui::Context) {
         "C:\\Windows\\Fonts\\segoeuib.ttf",
         "C:\\Windows\\Fonts\\seguisb.ttf",
         "C:\\Windows\\Fonts\\segoeui.ttf",
+        "/System/Library/Fonts/SFNS.ttf",
+        "/System/Library/Fonts/SFNSText.ttf",
+        "/System/Library/Fonts/Helvetica.ttc",
     ] {
         if let Ok(data) = std::fs::read(path) {
             fonts.font_data.insert(

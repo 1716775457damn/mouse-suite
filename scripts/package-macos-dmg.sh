@@ -38,6 +38,26 @@ if [[ -d "$ROOT/workflows" ]]; then
 fi
 
 # Ad-hoc sign so Gatekeeper at least sees a signature (not notarized)
+# Build AppIcon.icns from source PNG when available
+ICON_SRC="$ROOT/packaging/macos/AppIcon-1024.png"
+if [[ -f "$ICON_SRC" ]]; then
+  ICONSET="$STAGE/AppIcon.iconset"
+  mkdir -p "$ICONSET"
+  for size in 16 32 128 256 512; do
+    sips -z "$size" "$size" "$ICON_SRC" --out "$ICONSET/icon_${size}x${size}.png" >/dev/null
+    sips -z $((size * 2)) $((size * 2)) "$ICON_SRC" --out "$ICONSET/icon_${size}x${size}@2x.png" >/dev/null
+  done
+  iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns"
+  rm -rf "$ICONSET"
+elif [[ -f "$ROOT/packaging/macos/AppIcon.icns" ]]; then
+  cp "$ROOT/packaging/macos/AppIcon.icns" "$APP/Contents/Resources/"
+fi
+
+# Default config into Resources (read-only); runtime writes to Application Support
+if [[ -f "$ROOT/config.toml" ]]; then
+  cp "$ROOT/config.toml" "$APP/Contents/Resources/config.toml"
+fi
+
 codesign --force --deep --sign - "$APP" || true
 
 ln -sf /Applications "$STAGE/Applications"
