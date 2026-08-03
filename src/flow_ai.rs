@@ -3,57 +3,8 @@
 use crate::flow::FlowDocument;
 use crate::flow_md::{self, MdFlowFile};
 use crate::scribe_ai::{self, AiConfig};
+use crate::skills;
 use serde_json::{json, Value};
-
-const SYSTEM_PROMPT: &str = r#"你是 Mouse Suite 流程图生成器。根据用户的中文需求，输出**一个** JSON 对象。
-禁止输出 Markdown 代码围栏、禁止 mermaid、禁止解释文字。只输出纯 JSON。
-
-严格使用下列 schema（字段名必须一致；id 必须是数字，不要用字符串）：
-{
-  "version": 1,
-  "title": "短标题",
-  "nodes": [
-    {
-      "id": 1,
-      "kind": "Start",
-      "pos": [60, 180],
-      "element_name": "",
-      "or_elements": [],
-      "fallback": "",
-      "threshold": 0.85,
-      "pure_vision": false,
-      "retries": 0,
-      "retry_ms": 300,
-      "on_fail": "skip",
-      "seconds": 1,
-      "max_times": 50,
-      "message": "",
-      "instruction": "",
-      "type_text": "",
-      "type_interval_ms": 30
-    }
-  ],
-  "edges": [ { "from": 1, "to": 2, "branch": "main" } ],
-  "next_id": 3
-}
-
-kind 只能是:
-"Start"|"End"|"Click"|"Wait"|"TypeText"|"Pause"|"Manual"|"LoopStart"|"LoopEnd"|"IfVision"|"LoopWhile"
-
-edges 必须是对象数组，形如 {"from":1,"to":2,"branch":"main"}，禁止写成 ["1","2"]。
-Click/IfVision/LoopWhile 用 element_name 字段（不要 payload/selector/label）。
-Wait 的秒数写在 seconds（整数秒，不要毫秒 duration）。
-
-规则:
-1. 必须有且仅有一个 Start、一个 End；边要连通。
-2. 「成功点击 N 次 / 匹配到才算一次」: LoopStart(seconds=N) → IfVision —true→ Click → LoopEnd → End；IfVision 的 false **接回自身**。
-3. 普通「循环 N 次每次都点」: LoopStart → Click → LoopEnd。
-4. 键盘输入用 TypeText；延时用 Wait。
-5. IfVision 必须有 true 与 false 两条出边。
-6. 只输出 JSON 对象本身。
-
-最小示例（点击登录→等待2秒→点击提交）:
-{"version":1,"title":"登录提交","nodes":[{"id":1,"kind":"Start","pos":[60,180]},{"id":2,"kind":"Click","pos":[260,180],"element_name":"btn_login"},{"id":3,"kind":"Wait","pos":[460,180],"seconds":2},{"id":4,"kind":"Click","pos":[660,180],"element_name":"btn_submit"},{"id":5,"kind":"End","pos":[860,180]}],"edges":[{"from":1,"to":2,"branch":"main"},{"from":2,"to":3,"branch":"main"},{"from":3,"to":4,"branch":"main"},{"from":4,"to":5,"branch":"main"}],"next_id":6}"#;
 
 /// Generate a flow document from a natural-language prompt.
 pub fn generate_flow_document(
@@ -70,18 +21,21 @@ pub fn generate_flow_document(
     user.push_str(prompt);
     user.push_str("\n\n");
     if element_names.is_empty() {
-        user.push_str("元素库：暂无已录制元素，请自行起合理的 element_name（英文或拼音）。\n");
+        user.push_str(
+            "元素库：暂无已录制元素，请自行起合理的 element_name（英文或拼音）。\n",
+        );
     } else {
-        user.push_str("可用元素库名称（优先使用）：\n");
+        user.push_str("可用元素库名称（优先原样使用，不要改写）：\n");
         for n in element_names {
             user.push_str("- ");
             user.push_str(n);
             user.push('\n');
         }
     }
-    user.push_str("\n请只输出 mouse-suite-flow JSON 对象，不要其它文字。");
+    user.push_str("\n先根据内置 Skills 选择 Pattern（A–F），再输出 mouse-suite-flow JSON 对象，不要其它文字。");
 
-    let raw = scribe_ai::chat_completion(cfg, SYSTEM_PROMPT, &user)?;
+    let system = skills::flow_ai_system_prompt();
+    let raw = scribe_ai::chat_completion(cfg, &system, &user)?;
     let (title, description, doc) = parse_model_flow(&raw)?;
     Ok((title, description, doc))
 }

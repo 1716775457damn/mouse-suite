@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Mouse Suite — Flow</title>
+  <link rel="stylesheet" href="shared.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="chrome">
+      <div class="traffic"><i class="r"></i><i class="y"></i><i class="g"></i></div>
+      <div class="brand">
+        <div class="brand-mark"></div>
+        <div><strong>Mouse Suite</strong><span>桌面自动化套件</span></div>
+      </div>
+      <div class="pill">就绪</div>
+      <nav class="tabs">
+        <button class="tab">录制</button>
+        <button class="tab">点击</button>
+        <button class="tab active">流程</button>
+        <button class="tab">书写</button>
+      </nav>
+      <div class="chrome-actions">
+        <button class="icon-btn" type="button" onclick="toggleTheme()">◐</button>
+      </div>
+    </header>
+    <div class="main">
+      <aside class="sidebar" style="width:200px">
+        <div class="side-title">节点</div>
+        <button class="btn btn-secondary btn-block">开始</button>
+        <button class="btn btn-secondary btn-block">点击</button>
+        <button class="btn btn-secondary btn-block">等待</button>
+        <button class="btn btn-secondary btn-block">条件</button>
+        <button class="btn btn-secondary btn-block">循环</button>
+        <div style="height:8px"></div>
+        <div class="side-title">操作</div>
+        <button class="btn btn-ghost btn-block" style="text-align:left">重置布局</button>
+        <button class="btn btn-ghost btn-block" style="text-align:left">撤销</button>
+        <button class="btn btn-ghost btn-block" style="text-align:left">重做</button>
+        <button class="btn btn-primary btn-block">运行流程</button>
+      </aside>
+      <section class="content" style="padding:12px; gap:8px">
+        <div class="canvas">
+          <div class="node start" style="left:48px; top:80px"><span class="dot"></span>Start</div>
+          <div class="node click" style="left:220px; top:160px"><span class="dot"></span>Click 登录</div>
+          <div class="node wait" style="left:400px; top:100px"><span class="dot"></span>Wait 800ms</div>
+          <svg style="position:absolute; inset:0; width:100%; height:100%; pointer-events:none">
+            <path d="M168 100 C200 100 180 180 220 180" stroke="#5eead4" stroke-width="2" fill="none" opacity="0.7"/>
+            <path d="M340 180 C380 180 380 120 400 120" stroke="#5eead4" stroke-width="2" fill="none" opacity="0.7"/>
+          </svg>
+        </div>
+      </section>
+      <aside class="inspector">
+        <h2>检查器</h2>
+        <div class="field" style="margin-bottom:12px">
+          <label>节点名称</label>
+          <input value="Click 登录" />
+        </div>
+        <div class="field" style="margin-bottom:12px">
+          <label>元素</label>
+          <input value="登录按钮" />
+        </div>
+        <div class="field" style="margin-bottom:12px">
+          <label>AI 提示</label>
+          <textarea>若按钮不可见则等待页面加载后再点。</textarea>
+        </div>
+        <button class="btn btn-secondary btn-block">保存节点</button>
+      </aside>
+    </div>
+    <div class="status-bar">缩放 100% · 3 节点 · 2 连线</div>
+  </div>
+  <script>
+    function toggleTheme() {
+      if (document.documentElement.getAttribute('data-theme') === 'dark')
+        document.documentElement.removeAttribute('data-theme');
+      else document.documentElement.setAttribute('data-theme', 'dark');
+    }
+  </script>
+</body>
+</html>

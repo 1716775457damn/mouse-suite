@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Mouse Suite — Recorder</title>
+  <link rel="stylesheet" href="shared.css" />
+</head>
+<body>
+  <div class="app" id="app">
+    <header class="chrome">
+      <div class="traffic"><i class="r"></i><i class="y"></i><i class="g"></i></div>
+      <div class="brand">
+        <div class="brand-mark"></div>
+        <div><strong>Mouse Suite</strong><span>桌面自动化套件</span></div>
+      </div>
+      <div class="pill">就绪</div>
+      <nav class="tabs">
+        <button class="tab active">录制</button>
+        <button class="tab">点击</button>
+        <button class="tab">流程</button>
+        <button class="tab">书写</button>
+      </nav>
+      <div class="chrome-actions">
+        <button class="icon-btn" type="button" onclick="toggleTheme()" title="Theme">◐</button>
+        <button class="icon-btn" type="button">中</button>
+      </div>
+    </header>
+    <div class="main">
+      <aside class="sidebar">
+        <div class="side-title">元素资源</div>
+        <button class="btn btn-cta btn-block">捕获元素</button>
+        <button class="btn btn-secondary btn-block">导入…</button>
+        <div class="list-row active">登录按钮</div>
+        <div class="list-row">搜索框</div>
+        <div class="list-row">提交</div>
+        <div class="list-row">关闭对话框</div>
+        <div style="flex:1"></div>
+        <p class="muted" style="font-size:12px">拖拽到流程画布即可引用。</p>
+      </aside>
+      <section class="content">
+        <div class="row spread">
+          <div>
+            <h1 style="font-size:20px">元素图库</h1>
+            <p class="muted">截取界面控件，供点击器与流程节点复用。</p>
+          </div>
+          <button class="btn btn-primary">刷新预览</button>
+        </div>
+        <div class="grid-cards">
+          <article class="card"><div class="thumb"></div><strong>登录按钮</strong><p class="muted">1920×48 · 置信度 0.94</p></article>
+          <article class="card"><div class="thumb" style="opacity:.85"></div><strong>搜索框</strong><p class="muted">420×36 · 置信度 0.91</p></article>
+          <article class="card"><div class="thumb" style="opacity:.7"></div><strong>提交</strong><p class="muted">120×40 · 置信度 0.88</p></article>
+        </div>
+      </section>
+    </div>
+  </div>
+  <script>
+    function toggleTheme() {
+      const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+      document.documentElement.setAttribute('data-theme', dark ? '' : 'dark');
+      if (!dark) document.documentElement.setAttribute('data-theme', 'dark');
+      else document.documentElement.removeAttribute('data-theme');
+    }
+  </script>
+</body>
+</html>

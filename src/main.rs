@@ -14,6 +14,7 @@ mod recorder;
 mod screen;
 mod scribe;
 mod scribe_ai;
+mod skills;
 mod theme;
 mod workflow;
 
@@ -58,11 +59,13 @@ impl SuiteApp {
             &cc.egui_ctx,
             theme::ThemeMode::from_str(&config.theme),
         );
+        skills::ensure_bundled_skills_on_disk();
         let image_dir = config.image_dir();
         // One global grab for both element marquee + document click recording.
         let (rec_tx, rec_rx) = mpsc::channel();
         let (scribe_tx, scribe_rx) = mpsc::channel();
-        let hook = MouseHook::start(rec_tx, scribe_tx);
+        let (flow_tx, flow_rx) = mpsc::channel();
+        let hook = MouseHook::start(rec_tx, scribe_tx, flow_tx);
         let recorder = RecorderApp::new(config, hook.recorder_flag.clone(), rec_rx);
         let clicker = ClickerApp::new(image_dir);
         let scribe = ScribeApp::new(hook.scribe_flag.clone(), hook.scribe_ignore.clone(), scribe_rx);
@@ -70,7 +73,7 @@ impl SuiteApp {
             tab: Tab::Recorder,
             recorder,
             clicker,
-            flow: FlowEditor::new(),
+            flow: FlowEditor::new(hook.flow_flag.clone(), flow_rx),
             scribe,
             bridge: AgentBridge::new(),
             hotkeys: HotkeyBus::spawn(),
@@ -536,6 +539,108 @@ impl SuiteApp {
         response.on_hover_text(id)
     }
 
+    /// Undecorated windows have no OS resize grips — add edge/corner hit zones.
+    fn border_resize(ctx: &egui::Context) {
+        if ctx.input(|i| i.viewport().maximized.unwrap_or(false)) {
+            return;
+        }
+
+        const EDGE: f32 = 5.0;
+        const CORNER: f32 = 12.0;
+        // Keep clear of traffic lights (left) and theme/lang controls (right).
+        const CHROME_LEFT: f32 = 120.0;
+        const CHROME_RIGHT: f32 = 280.0;
+        const CHROME_TOP: f32 = 40.0;
+        let rect = ctx.screen_rect();
+
+        type RD = egui::viewport::ResizeDirection;
+        let mid_w = (rect.width() - CHROME_LEFT - CHROME_RIGHT).max(0.0);
+        let side_h = (rect.height() - CHROME_TOP - CORNER).max(0.0);
+
+        // No NW corner: it would sit on the close/minimize/maximize buttons.
+        let zones: [(egui::Rect, RD, egui::CursorIcon); 7] = [
+            (
+                egui::Rect::from_min_size(
+                    egui::pos2(rect.left() + CHROME_LEFT, rect.top()),
+                    egui::vec2(mid_w, EDGE),
+                ),
+                RD::North,
+                egui::CursorIcon::ResizeVertical,
+            ),
+            (
+                egui::Rect::from_min_size(
+                    egui::pos2(rect.left() + CORNER, rect.bottom() - EDGE),
+                    egui::vec2((rect.width() - 2.0 * CORNER).max(0.0), EDGE),
+                ),
+                RD::South,
+                egui::CursorIcon::ResizeVertical,
+            ),
+            (
+                egui::Rect::from_min_size(
+                    egui::pos2(rect.left(), rect.top() + CHROME_TOP),
+                    egui::vec2(EDGE, side_h),
+                ),
+                RD::West,
+                egui::CursorIcon::ResizeHorizontal,
+            ),
+            (
+                egui::Rect::from_min_size(
+                    egui::pos2(rect.right() - EDGE, rect.top() + CHROME_TOP),
+                    egui::vec2(EDGE, side_h),
+                ),
+                RD::East,
+                egui::CursorIcon::ResizeHorizontal,
+            ),
+            (
+                egui::Rect::from_min_size(
+                    egui::pos2(rect.right() - CORNER, rect.top()),
+                    egui::vec2(CORNER, EDGE),
+                ),
+                RD::NorthEast,
+                egui::CursorIcon::ResizeNeSw,
+            ),
+            (
+                egui::Rect::from_min_size(
+                    egui::pos2(rect.left(), rect.bottom() - CORNER),
+                    egui::vec2(CORNER, CORNER),
+                ),
+                RD::SouthWest,
+                egui::CursorIcon::ResizeNeSw,
+            ),
+            (
+                egui::Rect::from_min_size(
+                    egui::pos2(rect.right() - CORNER, rect.bottom() - CORNER),
+                    egui::vec2(CORNER, CORNER),
+                ),
+                RD::SouthEast,
+                egui::CursorIcon::ResizeNwSe,
+            ),
+        ];
+
+        for (i, (zone, dir, cursor)) in zones.into_iter().enumerate() {
+            if zone.width() <= 1.0 || zone.height() <= 1.0 {
+                continue;
+            }
+            // Hit target must follow Area position (never allocate at screen 0,0).
+            let resp = egui::Area::new(egui::Id::new(("win_resize", i)))
+                .fixed_pos(zone.min)
+                .order(egui::Order::Middle)
+                .interactable(true)
+                .sense(egui::Sense::click_and_drag())
+                .show(ctx, |ui| {
+                    ui.allocate_exact_size(zone.size(), egui::Sense::click_and_drag())
+                        .1
+                })
+                .inner;
+            if resp.hovered() || resp.dragged() {
+                ctx.set_cursor_icon(cursor);
+            }
+            if resp.drag_started() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::BeginResize(dir));
+            }
+        }
+    }
+
     fn window_chrome(&mut self, ctx: &egui::Context) {
         egui::TopBottomPanel::top("window_chrome")
             .exact_height(82.0)
@@ -571,6 +676,12 @@ impl SuiteApp {
                                 ui,
                                 i18n::t("app.status.running"),
                                 theme::StatusTone::Run,
+                            );
+                        } else if self.flow.is_click_recording() {
+                            theme::status_pill(
+                                ui,
+                                i18n::t("app.status.flow_recording"),
+                                theme::StatusTone::Danger,
                             );
                         } else if self.scribe.is_recording() {
                             theme::status_pill(
@@ -688,6 +799,10 @@ impl eframe::App for SuiteApp {
                         self.scribe.stop_recording(ctx);
                         self.tab = Tab::Scribe;
                     }
+                    if self.flow.is_click_recording() {
+                        self.flow.stop_click_recording(ctx);
+                        self.tab = Tab::Flow;
+                    }
                 }
                 HotkeyEvent::Start => {
                     if !self.clicker.is_busy() {
@@ -720,17 +835,55 @@ impl eframe::App for SuiteApp {
 
         self.recorder.tick_hide_then_capture(ctx);
 
+        // Flow click-recording: each click → auto-named template in element DB.
+        // Default: fixed crop around click. Alt+click: Snipaste-style marquee ROI.
+        if self.flow.is_click_recording() {
+            if self.scribe.is_recording() {
+                self.scribe.stop_recording(ctx);
+            }
+            let jobs = self.flow.poll_click_record_jobs();
+            for (name, x, y) in jobs {
+                if let Err(e) = self.recorder.save_click_crop(&name, x, y) {
+                    self.flow.set_status(format!("保存「{name}」失败: {e}"));
+                }
+            }
+            if let Some(name) = self.flow.take_pending_precise_capture() {
+                self.recorder.start_named_capture_after_hide(ctx, name);
+            }
+            if self.flow.is_awaiting_precise() && !self.recorder.is_capturing() {
+                let ok = self
+                    .flow
+                    .precise_name_in_flight()
+                    .map(|n| self.recorder.has_element(n))
+                    .unwrap_or(false);
+                if !ok {
+                    self.recorder.clear_forced_element_name();
+                }
+                self.flow.finish_precise_capture(ctx, ok);
+            }
+            ctx.request_repaint();
+        }
+
         self.flow
             .set_element_catalog(self.recorder.element_catalog());
         self.flow
             .set_run_highlight(self.clicker.current_workflow_node());
-        if self.clicker.is_busy() || self.clicker.should_show_run_hud() {
+        if self.clicker.is_busy()
+            || self.clicker.should_show_run_hud()
+            || self.flow.is_click_recording()
+        {
             ctx.request_repaint();
         }
 
         // Top-of-screen run HUD (main window stays minimized)
         if self.clicker.should_show_run_hud() {
             self.clicker.paint_run_hud(ctx);
+        }
+        if self.flow.is_click_recording() {
+            // Hide record HUD while Snipaste-style overlay is active.
+            if !(self.flow.is_awaiting_precise() && self.recorder.is_capturing()) {
+                self.flow.paint_click_record_hud(ctx);
+            }
         }
 
         if let Some(name) = self.flow.pending_screenshot.take() {
@@ -758,6 +911,11 @@ impl eframe::App for SuiteApp {
         } else {
             self.flow.ui(ctx);
         }
+
+        // After content so edge grips stay on top (skip overlay capture).
+        if !capturing {
+            Self::border_resize(ctx);
+        }
     }
 }
 
@@ -769,6 +927,7 @@ fn main() -> eframe::Result {
             .with_inner_size([960.0, 640.0])
             .with_min_inner_size([720.0, 480.0])
             .with_decorations(false)
+            .with_resizable(true)
             .with_title("Mouse Suite"),
         ..Default::default()
     };

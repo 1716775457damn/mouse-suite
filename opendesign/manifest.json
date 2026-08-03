@@ -1,0 +1,64 @@
+{
+  "generated": "2026-08-03T14:50:00+08:00",
+  "sections": [
+    {
+      "id": "mockups",
+      "label": "Mockups",
+      "groups": [
+        {
+          "slug": "skill-smoke",
+          "files": [
+            {
+              "label": "apple-ui-smoke.html",
+              "path": "mockups/skill-smoke/apple-ui-smoke.html"
+            }
+          ]
+        },
+        {
+          "slug": "ui-polish",
+          "files": [
+            {
+              "label": "chrome-recorder.html",
+              "path": "mockups/ui-polish/chrome-recorder.html"
+            },
+            {
+              "label": "clicker.html",
+              "path": "mockups/ui-polish/clicker.html"
+            },
+            {
+              "label": "flow.html",
+              "path": "mockups/ui-polish/flow.html"
+            },
+            {
+              "label": "scribe.html",
+              "path": "mockups/ui-polish/scribe.html"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "design-systems",
+      "label": "Design Systems",
+      "groups": [
+        {
+          "slug": "mouse-suite",
+          "files": [
+            {
+              "label": "README.md",
+              "path": "design-systems/mouse-suite/README.md"
+            },
+            {
+              "label": "SKILL.md",
+              "path": "design-systems/mouse-suite/SKILL.md"
+            },
+            {
+              "label": "colors_and_type.css",
+              "path": "design-systems/mouse-suite/tokens/colors_and_type.css"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -413,10 +413,26 @@ pub struct FlowEditor {
     ai_prompt: String,
     ai_busy: Arc<AtomicBool>,
     ai_job: Option<Receiver<Result<(String, String, FlowDocument), String>>>,
+    /// Flow-page click recording: each real click → auto-named template → Click nodes.
+    click_recording: bool,
+    recorded_click_names: Vec<String>,
+    next_click_name: u32,
+    /// Session stamp for auto names: `click_{ts}_{NNN}`.
+    record_session_ts: String,
+    /// Queued precise (Alt) capture name for main to start marquee.
+    pending_precise_capture: Option<String>,
+    /// Waiting for recorder marquee to finish before resuming click listen.
+    awaiting_precise_resume: bool,
+    precise_name_in_flight: Option<String>,
+    flow_flag: Arc<AtomicBool>,
+    click_rx: std::sync::mpsc::Receiver<crate::mouse_hook::FlowClick>,
 }
 
 impl FlowEditor {
-    pub fn new() -> Self {
+    pub fn new(
+        flow_flag: Arc<AtomicBool>,
+        click_rx: std::sync::mpsc::Receiver<crate::mouse_hook::FlowClick>,
+    ) -> Self {
         let mut ed = Self {
             nodes: Vec::new(),
             edges: Vec::new(),
@@ -447,11 +463,275 @@ impl FlowEditor {
             ai_prompt: String::new(),
             ai_busy: Arc::new(AtomicBool::new(false)),
             ai_job: None,
+            click_recording: false,
+            recorded_click_names: Vec::new(),
+            next_click_name: 1,
+            record_session_ts: String::new(),
+            pending_precise_capture: None,
+            awaiting_precise_resume: false,
+            precise_name_in_flight: None,
+            flow_flag,
+            click_rx,
         };
         ed.reset_default_graph();
         ed.undo_stack.clear();
         ed.redo_stack.clear();
         ed
+    }
+
+    fn alloc_click_name(&mut self) -> String {
+        let n = self.next_click_name;
+        self.next_click_name = self.next_click_name.saturating_add(1);
+        format!("click_{}_{:03}", self.record_session_ts, n)
+    }
+
+    fn peek_next_click_name(&self) -> String {
+        format!(
+            "click_{}_{:03}",
+            self.record_session_ts, self.next_click_name
+        )
+    }
+
+    pub fn is_click_recording(&self) -> bool {
+        self.click_recording
+    }
+
+    pub fn start_click_recording(&mut self, ctx: &egui::Context) {
+        if self.click_recording {
+            return;
+        }
+        // Drain stale clicks
+        while self.click_rx.try_recv().is_ok() {}
+        self.click_recording = true;
+        self.recorded_click_names.clear();
+        self.next_click_name = 1;
+        self.record_session_ts = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
+        self.pending_precise_capture = None;
+        self.awaiting_precise_resume = false;
+        self.precise_name_in_flight = None;
+        self.flow_flag.store(true, Ordering::Relaxed);
+        self.status = crate::i18n::t("flow.record.started").into();
+        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+        ctx.request_repaint();
+    }
+
+    pub fn stop_click_recording(&mut self, ctx: &egui::Context) {
+        if !self.click_recording {
+            return;
+        }
+        self.flow_flag.store(false, Ordering::Relaxed);
+        self.click_recording = false;
+        self.pending_precise_capture = None;
+        self.awaiting_precise_resume = false;
+        self.precise_name_in_flight = None;
+        while self.click_rx.try_recv().is_ok() {}
+        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        let n = self.recorded_click_names.len();
+        if n == 0 {
+            self.status = crate::i18n::t("flow.record.empty").into();
+            return;
+        }
+        let steps: Vec<WorkflowStep> = self
+            .recorded_click_names
+            .iter()
+            .map(|name| {
+                WorkflowStep::new(StepType::Click {
+                    element_name: name.clone(),
+                    or_elements: Vec::new(),
+                    threshold: Some(0.85),
+                    pure_vision: Some(true),
+                    retries: Some(0),
+                    retry_ms: Some(300),
+                    on_fail: Some(workflow::ClickFailAction::Skip),
+                })
+            })
+            .collect();
+        self.title = format!("{} (×{})", crate::i18n::t("flow.record.title"), n);
+        self.description = crate::i18n::t("flow.record.desc").into();
+        self.agent_build_from_steps(&steps);
+        self.status = format!("{} — {}", crate::i18n::t("flow.record.done"), n);
+    }
+
+    /// Auto-crop jobs: `(name, x, y)`. Precise (Alt) jobs go to `pending_precise_capture`.
+    pub fn poll_click_record_jobs(&mut self) -> Vec<(String, i32, i32)> {
+        if !self.click_recording || self.awaiting_precise_resume || self.pending_precise_capture.is_some()
+        {
+            return Vec::new();
+        }
+        let mut jobs = Vec::new();
+        while let Ok((x, y, precise)) = self.click_rx.try_recv() {
+            let name = self.alloc_click_name();
+            self.recorded_click_names.push(name.clone());
+            if precise {
+                self.status = format!(
+                    "{} · {} → 「{}」 {}",
+                    crate::i18n::t("flow.record.capturing"),
+                    self.recorded_click_names.len(),
+                    name,
+                    crate::i18n::t("flow.record.precise_hint")
+                );
+                self.pending_precise_capture = Some(name);
+                // Pause further click capture until marquee finishes.
+                self.flow_flag.store(false, Ordering::Relaxed);
+                break;
+            }
+            self.status = format!(
+                "{} · {} → 「{}」 @({}, {})",
+                crate::i18n::t("flow.record.capturing"),
+                self.recorded_click_names.len(),
+                name,
+                x,
+                y
+            );
+            jobs.push((name, x, y));
+        }
+        jobs
+    }
+
+    /// Take queued precise capture name (Snipaste-style marquee).
+    pub fn take_pending_precise_capture(&mut self) -> Option<String> {
+        let name = self.pending_precise_capture.take()?;
+        self.precise_name_in_flight = Some(name.clone());
+        self.awaiting_precise_resume = true;
+        Some(name)
+    }
+
+    pub fn is_awaiting_precise(&self) -> bool {
+        self.awaiting_precise_resume
+    }
+
+    /// Name of the in-flight precise capture (if any).
+    pub fn precise_name_in_flight(&self) -> Option<&str> {
+        self.precise_name_in_flight.as_deref()
+    }
+
+    /// After marquee ends: keep or drop the step, then resume listening if still recording.
+    pub fn finish_precise_capture(&mut self, ctx: &egui::Context, success: bool) {
+        if !self.awaiting_precise_resume {
+            return;
+        }
+        let name = self.precise_name_in_flight.take();
+        self.awaiting_precise_resume = false;
+        if !success {
+            if let Some(ref n) = name {
+                self.recorded_click_names.retain(|x| x != n);
+                self.status = format!("{}「{}」", crate::i18n::t("flow.record.precise_cancel"), n);
+            }
+        } else if let Some(ref n) = name {
+            self.status = format!(
+                "{} · {} → 「{}」",
+                crate::i18n::t("flow.record.precise_ok"),
+                self.recorded_click_names.len(),
+                n
+            );
+        }
+        if self.click_recording {
+            while self.click_rx.try_recv().is_ok() {}
+            self.flow_flag.store(true, Ordering::Relaxed);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+            ctx.request_repaint();
+        }
+    }
+
+    pub fn set_status(&mut self, s: impl Into<String>) {
+        self.status = s.into();
+    }
+
+    /// Top-of-screen HUD while click-recording (main window minimized).
+    pub fn paint_click_record_hud(&mut self, ctx: &egui::Context) {
+        if !self.click_recording {
+            return;
+        }
+        let count = self.recorded_click_names.len();
+        let next_name = if self.awaiting_precise_resume {
+            self.precise_name_in_flight
+                .clone()
+                .unwrap_or_else(|| self.peek_next_click_name())
+        } else {
+            self.peek_next_click_name()
+        };
+        let screen = ctx.input(|i| {
+            i.viewport()
+                .monitor_size
+                .unwrap_or(egui::vec2(1280.0, 800.0))
+        });
+        let bar_w = 520.0_f32;
+        let bar_h = 52.0_f32;
+        let pos_x = ((screen.x - bar_w) * 0.5).max(8.0);
+        let pos_y = 10.0;
+        let mut stop = false;
+        let precise_wait = self.awaiting_precise_resume;
+
+        let builder = egui::ViewportBuilder::default()
+            .with_title("Mouse Suite · 录制点击")
+            .with_decorations(false)
+            .with_taskbar(false)
+            .with_resizable(false)
+            .with_transparent(true)
+            .with_window_level(egui::WindowLevel::AlwaysOnTop)
+            .with_inner_size([bar_w, bar_h])
+            .with_position([pos_x, pos_y]);
+
+        ctx.show_viewport_immediate(
+            egui::ViewportId::from_hash_of("mouse_suite_flow_record_hud"),
+            builder,
+            |ctx, _class| {
+                ctx.request_repaint();
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::none().fill(egui::Color32::TRANSPARENT))
+                    .show(ctx, |ui| {
+                        let full = ui.max_rect();
+                        ui.painter().rect_filled(full.shrink(1.0), 12.0, col().HUD_BG);
+                        ui.allocate_new_ui(egui::UiBuilder::new().max_rect(full.shrink(10.0)), |ui| {
+                            ui.horizontal(|ui| {
+                                let title = if precise_wait {
+                                    crate::i18n::t("flow.record.precise_hud")
+                                } else {
+                                    crate::i18n::t("flow.record.capturing")
+                                };
+                                ui.label(
+                                    egui::RichText::new(title)
+                                        .size(13.0)
+                                        .strong()
+                                        .color(col().HUD_TEXT),
+                                );
+                                ui.label(
+                                    egui::RichText::new(format!("· {count}  → {next_name}"))
+                                        .size(11.0)
+                                        .color(col().HUD_MUTED),
+                                );
+                                if !precise_wait {
+                                    ui.label(
+                                        egui::RichText::new(crate::i18n::t("flow.record.alt_hint"))
+                                            .size(11.0)
+                                            .color(col().HUD_MUTED),
+                                    );
+                                }
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        let btn = egui::Button::new(
+                                            egui::RichText::new(crate::i18n::t("flow.btn.record_stop"))
+                                                .size(12.0)
+                                                .color(egui::Color32::WHITE),
+                                        )
+                                        .fill(col().DANGER)
+                                        .rounding(6.0);
+                                        if ui.add(btn).clicked() {
+                                            stop = true;
+                                        }
+                                    },
+                                );
+                            });
+                        });
+                    });
+            },
+        );
+
+        if stop {
+            self.stop_click_recording(ctx);
+        }
     }
 
     pub fn set_element_catalog(&mut self, items: Vec<ElementCatalogItem>) {
@@ -711,6 +991,15 @@ impl FlowEditor {
             egui::RichText::new(crate::i18n::t("flow.ai.subtitle"))
                 .size(10.0)
                 .color(col().MUTED),
+        );
+        ui.label(
+            egui::RichText::new(format!(
+                "{} · {}",
+                crate::i18n::t("flow.ai.skills"),
+                crate::skills::flow_skills_status_line()
+            ))
+            .size(10.0)
+            .color(col().ACCENT),
         );
         ui.add_space(4.0);
         ui.add(
@@ -1922,27 +2211,49 @@ impl FlowEditor {
                     ui.add_space(3.0);
                 }
                 ui.add_space(10.0);
-                ui.separator();
+                theme::soft_separator(ui);
+                if self.click_recording {
+                    if theme::danger_button(ui, crate::i18n::t("flow.btn.record_stop"))
+                        .on_hover_text(crate::i18n::t("flow.record.stop_hint"))
+                        .clicked()
+                    {
+                        self.stop_click_recording(ctx);
+                    }
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{} · {}",
+                            crate::i18n::t("flow.record.capturing"),
+                            self.recorded_click_names.len()
+                        ))
+                        .size(11.0)
+                        .color(col().WARN),
+                    );
+                } else if theme::primary_button(ui, crate::i18n::t("flow.btn.record_start"))
+                    .on_hover_text(crate::i18n::t("flow.record.start_hint"))
+                    .clicked()
+                {
+                    self.start_click_recording(ctx);
+                }
                 ui.add_space(6.0);
-                if ui.button(crate::i18n::t("flow.btn.reset")).clicked() {
+                if theme::secondary_button(ui, crate::i18n::t("flow.btn.reset")).clicked() {
                     self.reset_default_graph();
                 }
-                if ui.button(crate::i18n::t("flow.btn.layout")).clicked() {
+                if theme::secondary_button(ui, crate::i18n::t("flow.btn.layout")).clicked() {
                     self.auto_layout();
                 }
-                if ui.button(crate::i18n::t("flow.btn.undo")).clicked() {
+                if theme::secondary_button(ui, crate::i18n::t("flow.btn.undo")).clicked() {
                     self.agent_undo();
                 }
-                if ui.button(crate::i18n::t("flow.btn.redo")).clicked() {
+                if theme::secondary_button(ui, crate::i18n::t("flow.btn.redo")).clicked() {
                     self.agent_redo();
                 }
-                if ui.button(crate::i18n::t("flow.btn.copy")).clicked() {
+                if theme::secondary_button(ui, crate::i18n::t("flow.btn.copy")).clicked() {
                     self.copy_selection();
                 }
-                if ui.button(crate::i18n::t("flow.btn.paste")).clicked() {
+                if theme::secondary_button(ui, crate::i18n::t("flow.btn.paste")).clicked() {
                     self.paste_clipboard();
                 }
-                if ui.button(crate::i18n::t("flow.btn.delete")).clicked() {
+                if theme::danger_button(ui, crate::i18n::t("flow.btn.delete")).clicked() {
                     self.delete_selected();
                 }
             });
@@ -1970,9 +2281,8 @@ impl FlowEditor {
                     .show(ui, |ui| {
                         // AI first so it's never clipped below the fold.
                         self.ui_ai_panel(ui);
-                        ui.add_space(12.0);
-                        ui.separator();
                         ui.add_space(8.0);
+                        theme::soft_separator(ui);
 
                         ui.label(
                             egui::RichText::new(crate::i18n::t("flow.inspector.title"))
@@ -2369,9 +2679,8 @@ impl FlowEditor {
                             }
                         }
 
-                        ui.add_space(16.0);
-                        ui.separator();
-                        ui.add_space(8.0);
+                        ui.add_space(12.0);
+                        theme::soft_separator(ui);
                         ui.label(egui::RichText::new(crate::i18n::t("flow.section.file")).strong());
                         ui.add_space(4.0);
                         ui.label(crate::i18n::t("flow.field.title"));
@@ -2390,7 +2699,7 @@ impl FlowEditor {
                         );
                         ui.add_space(4.0);
                         ui.horizontal(|ui| {
-                            if ui.button(crate::i18n::t("flow.btn.open")).clicked() {
+                            if theme::secondary_button(ui, crate::i18n::t("flow.btn.open")).clicked() {
                                 if let Some(path) = rfd::FileDialog::new()
                                     .add_filter("Flow", &["md", "flow.json", "json", "txt"])
                                     .pick_file()
@@ -2402,7 +2711,7 @@ impl FlowEditor {
                                     }
                                 }
                             }
-                            if ui.button(crate::i18n::t("flow.btn.save")).clicked() {
+                            if theme::secondary_button(ui, crate::i18n::t("flow.btn.save")).clicked() {
                                 let default = if self.path.is_empty() {
                                     if self.title.trim().is_empty() {
                                         "workflow.md".to_string()
@@ -2548,8 +2857,8 @@ impl FlowEditor {
             let p0 = to_screen(a.out_port_for(e.branch), self.pan);
             let p1 = to_screen(b.in_port(), self.pan);
             let color = match e.branch {
-                EdgeBranch::True => Color32::from_rgb(52, 211, 153),
-                EdgeBranch::False => Color32::from_rgb(251, 113, 133),
+                EdgeBranch::True => col().SUCCESS,
+                EdgeBranch::False => col().DANGER,
                 EdgeBranch::Main => col().WIRE,
             };
             draw_bezier(&painter, p0, p1, color, 2.0);
@@ -2787,7 +3096,7 @@ impl FlowEditor {
                 egui::Align2::CENTER_CENTER,
                 n.subtitle(),
                 FontId::proportional(11.0),
-                Color32::from_rgb(186, 230, 253),
+                col().WIRE,
             );
 
             // Ports
@@ -3040,7 +3349,7 @@ impl FlowEditor {
                                     let tex = self.catalog_tex.get(&item.name);
                                     let cell = egui::Frame::none()
                                         .fill(if selected {
-                                            Color32::from_rgb(224, 236, 255)
+                                            col().ACCENT_SOFT
                                         } else {
                                             col().PANEL_ELEVATED
                                         })

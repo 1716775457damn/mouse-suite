@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Mouse Suite — Scribe</title>
+  <link rel="stylesheet" href="shared.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="chrome">
+      <div class="traffic"><i class="r"></i><i class="y"></i><i class="g"></i></div>
+      <div class="brand">
+        <div class="brand-mark"></div>
+        <div><strong>Mouse Suite</strong><span>桌面自动化套件</span></div>
+      </div>
+      <div class="pill">就绪</div>
+      <nav class="tabs">
+        <button class="tab">录制</button>
+        <button class="tab">点击</button>
+        <button class="tab">流程</button>
+        <button class="tab active">书写</button>
+      </nav>
+      <div class="chrome-actions">
+        <button class="icon-btn" type="button" onclick="toggleTheme()">◐</button>
+      </div>
+    </header>
+    <div class="main">
+      <aside class="sidebar">
+        <div class="side-title">会话</div>
+        <button class="btn btn-primary btn-block">新建会话</button>
+        <div class="list-row active">登录流程说明</div>
+        <div class="list-row">批量导入笔记</div>
+        <div class="list-row">回归检查清单</div>
+        <div style="flex:1"></div>
+        <button class="btn btn-ghost btn-block" style="text-align:left">复制会话</button>
+        <button class="btn btn-ghost btn-block" style="text-align:left; color:var(--danger)">删除会话</button>
+      </aside>
+      <section class="content">
+        <div class="toolbar">
+          <button class="btn btn-cta">开始录制</button>
+          <button class="btn btn-secondary">停止</button>
+          <div style="flex:1"></div>
+          <button class="btn btn-secondary">JSON</button>
+          <button class="btn btn-secondary">Markdown</button>
+          <button class="btn btn-secondary">HTML</button>
+        </div>
+        <div class="row spread">
+          <div>
+            <h1 style="font-size:18px">登录流程说明</h1>
+            <p class="muted">12 步 · 上次编辑 今天 13:40</p>
+          </div>
+          <div class="seg">
+            <button class="active">步骤</button>
+            <button>AI</button>
+            <button>预览</button>
+          </div>
+        </div>
+        <div class="card" style="flex:1; display:flex; flex-direction:column; gap:10px">
+          <div class="list-row active">1. 打开应用主窗口</div>
+          <div class="list-row">2. 点击「登录」</div>
+          <div class="list-row">3. 输入账号</div>
+          <div class="list-row">4. 输入密码</div>
+          <div class="list-row">5. 确认并等待仪表盘</div>
+          <div class="field" style="margin-top:8px">
+            <label>步骤备注</label>
+            <textarea>截图需包含完整按钮文字，便于后续视觉匹配。</textarea>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+  <script>
+    function toggleTheme() {
+      if (document.documentElement.getAttribute('data-theme') === 'dark')
+        document.documentElement.removeAttribute('data-theme');
+      else document.documentElement.setAttribute('data-theme', 'dark');
+    }
+  </script>
+</body>
+</html>

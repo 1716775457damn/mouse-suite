@@ -538,9 +538,9 @@ impl ClickerApp {
                         painter.rect_stroke(
                             full.shrink(1.0),
                             14.0,
-                            egui::Stroke::new(1.0, egui::Color32::from_rgb(58, 58, 60)),
+                            egui::Stroke::new(1.0, col().HUD_EDGE),
                         );
-                        // SF Blue top rail
+                        // Accent top rail
                         let rail = egui::Rect::from_min_max(
                             egui::pos2(full.left() + 14.0, full.top() + 4.0),
                             egui::pos2(full.right() - 14.0, full.top() + 6.0),
@@ -552,7 +552,7 @@ impl ClickerApp {
                             egui::pos2(full.left() + 14.0, full.bottom() - 7.0),
                             egui::pos2(full.right() - 14.0, full.bottom() - 4.0),
                         );
-                        painter.rect_filled(strip, 2.0, egui::Color32::from_rgb(58, 58, 60));
+                        painter.rect_filled(strip, 2.0, col().HUD_EDGE);
                         let mut filled = strip;
                         filled.set_width((strip.width() * progress).max(4.0));
                         painter.rect_filled(filled, 2.0, col().ACCENT_HOT);
@@ -563,13 +563,15 @@ impl ClickerApp {
                         );
                         ui.allocate_new_ui(egui::UiBuilder::new().max_rect(inner), |ui| {
                             ui.horizontal(|ui| {
-                                // Pulse dot
+                                // Pulse dot — teal when running, warn when paused
+                                let base = col().ACCENT;
+                                let [r, g, b, _] = base.to_array();
                                 let dot_c = match state {
                                     AppState::Paused => col().WARN,
                                     _ => egui::Color32::from_rgb(
-                                        (0.0 + 40.0 * pulse) as u8,
-                                        (122.0 + 40.0 * pulse) as u8,
-                                        (255.0 - 20.0 * pulse) as u8,
+                                        (r as f32 + 30.0 * pulse).min(255.0) as u8,
+                                        (g as f32 + 20.0 * pulse).min(255.0) as u8,
+                                        (b as f32 + 10.0 * pulse).min(255.0) as u8,
                                     ),
                                 };
                                 let (dot_rect, _) = ui.allocate_exact_size(
@@ -583,7 +585,7 @@ impl ClickerApp {
                                     egui::RichText::new("Mouse Suite")
                                         .size(12.0)
                                         .strong()
-                                        .color(egui::Color32::from_rgb(226, 232, 240)),
+                                        .color(col().HUD_TEXT),
                                 );
 
                                 ui.add_space(10.0);
@@ -596,16 +598,22 @@ impl ClickerApp {
                                 ui.label(
                                     egui::RichText::new(phase)
                                         .size(11.0)
-                                        .color(egui::Color32::from_rgb(148, 163, 184)),
+                                        .color(col().HUD_MUTED),
                                 );
 
-                                ui.separator();
+                                ui.add_space(8.0);
+                                ui.label(
+                                    egui::RichText::new("·")
+                                        .size(11.0)
+                                        .color(col().HUD_MUTED),
+                                );
+                                ui.add_space(8.0);
 
                                 ui.label(
                                     egui::RichText::new(format!("{}/{}", step_num, total))
                                         .size(13.0)
                                         .strong()
-                                        .color(col().ACCENT_DIM),
+                                        .color(col().ACCENT),
                                 );
                                 if let Some((cur, tot)) = loop_prog {
                                     ui.add_space(4.0);
@@ -620,7 +628,7 @@ impl ClickerApp {
                                 ui.label(
                                     egui::RichText::new(&step_label)
                                         .size(13.0)
-                                        .color(egui::Color32::WHITE),
+                                        .color(col().HUD_TEXT),
                                 );
 
                                 ui.with_layout(
@@ -662,7 +670,7 @@ impl ClickerApp {
                                 ui.label(
                                     egui::RichText::new(msg)
                                         .size(11.0)
-                                        .color(egui::Color32::from_rgb(203, 213, 225)),
+                                        .color(col().HUD_MUTED),
                                 );
                             }
                         });
@@ -818,6 +826,8 @@ impl ClickerApp {
 
             let db_path = format!("{}\\mouse_recorder.db", element_folder);
             let db = ElementDatabase::new(db_path);
+            // Shared across IfVision → Click: reuse coords + grow ROI from last hits.
+            let vision = Arc::new(Mutex::new(VisionSession::default()));
 
             let mut pc: usize = 0;
             enum LoopFrame {
@@ -896,21 +906,30 @@ impl ClickerApp {
                             th,
                             retries,
                             retry_ms,
+                            &vision,
                         );
                         let label = names.join(" or ");
-                        if hit {
+                        if let Some(found) = hit {
+                            {
+                                let mut vs = vision.lock().unwrap();
+                                vs.remember(&found.name, found.x, found.y);
+                                vs.pending = Some(found.clone());
+                            }
                             log_write(
                                 &log,
                                 &log_file,
                                 format!(
-                                    "Step {}: IfVision '{}' → TRUE (jump {})",
+                                    "Step {}: IfVision '{}' → TRUE @({},{}) (jump {})",
                                     i + 1,
                                     label,
+                                    found.x,
+                                    found.y,
                                     then_jump + 1
                                 ),
                             );
                             pc = *then_jump;
                         } else {
+                            vision.lock().unwrap().pending = None;
                             log_write(
                                 &log,
                                 &log_file,
@@ -982,16 +1001,23 @@ impl ClickerApp {
                                 th,
                                 retries,
                                 retry_ms,
+                                &vision,
                             );
-                            if hit {
+                            if let Some(found) = hit {
+                                {
+                                    let mut vs = vision.lock().unwrap();
+                                    vs.remember(&found.name, found.x, found.y);
+                                }
                                 *count += 1;
                                 log_write(
                                     &log,
                                     &log_file,
                                     format!(
-                                        "Step {}: LoopWhile '{}' match — enter body ({}/{})",
+                                        "Step {}: LoopWhile '{}' match @({},{}) — enter body ({}/{})",
                                         i + 1,
                                         label,
+                                        found.x,
+                                        found.y,
                                         *count,
                                         max_times
                                     ),
@@ -1104,6 +1130,8 @@ impl ClickerApp {
                             retry_ms,
                             on_fail,
                             save_match_debug,
+                            &vision,
+                            &state,
                         );
                         if matches!(outcome, ClickOutcome::Abort) {
                             log_write(
@@ -1343,7 +1371,7 @@ impl ClickerApp {
                 ));
             }
 
-            egui::Window::new("等待确认")
+            theme::themed_window("等待确认")
                 .collapsible(false)
                 .resizable(false)
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
@@ -1351,27 +1379,30 @@ impl ClickerApp {
                     ui.set_min_width(320.0);
                     match kind {
                         DialogKind::Pause { message } => {
-                            ui.heading("流程已暂停");
+                            theme::modal_title(ui, "流程已暂停");
                             ui.add_space(6.0);
-                            ui.label(message.as_str());
+                            ui.label(egui::RichText::new(message.as_str()).color(theme::col().TEXT));
                         }
                         DialogKind::Manual {
                             message,
                             instruction,
                         } => {
-                            ui.heading("需要人工操作");
+                            theme::modal_title(ui, "需要人工操作");
                             ui.add_space(6.0);
-                            ui.label(message.as_str());
+                            ui.label(egui::RichText::new(message.as_str()).color(theme::col().TEXT));
                             if let Some(inst) = instruction {
                                 ui.add_space(4.0);
-                                ui.separator();
-                                ui.label(format!("操作说明: {}", inst));
+                                theme::hairline(ui);
+                                ui.label(
+                                    egui::RichText::new(format!("操作说明: {}", inst))
+                                        .color(theme::col().MUTED),
+                                );
                             }
                         }
                     }
                     ui.add_space(12.0);
                     ui.horizontal(|ui| {
-                        if ui.button("停止执行").clicked() {
+                        if theme::danger_button(ui, "停止执行").clicked() {
                             self.dialog_brought_to_front = false;
                             *self.state.lock().unwrap() = AppState::Idle;
                             *self.dialog_pending.lock().unwrap() = None;
@@ -1387,7 +1418,7 @@ impl ClickerApp {
                             DialogKind::Pause { .. } => "继续执行",
                             DialogKind::Manual { .. } => "已完成，继续",
                         };
-                        if ui.button(btn_label).clicked() {
+                        if theme::primary_button(ui, btn_label).clicked() {
                             self.dialog_brought_to_front = false;
                             *self.dialog_pending.lock().unwrap() = None;
                             *self.window_visible.lock().unwrap() = false;
@@ -1411,6 +1442,9 @@ impl ClickerApp {
             return;
         }
 
+        // Pin run log to the bottom so it never gets clipped by the form above.
+        self.paint_run_log_panel(ctx);
+
         egui::CentralPanel::default()
             .frame(egui::Frame::none().fill(col().BG))
             .show(ctx, |ui| {
@@ -1418,54 +1452,111 @@ impl ClickerApp {
                 egui::Frame::none()
                     .inner_margin(egui::Margin::symmetric(20.0, 18.0))
                     .show(ui, |ui| {
-                        theme::section_header(ui, crate::i18n::t("clicker.header.title"), crate::i18n::t("clicker.header.subtitle"));
+                        theme::section_header(
+                            ui,
+                            crate::i18n::t("clicker.header.title"),
+                            crate::i18n::t("clicker.header.subtitle"),
+                        );
 
                         theme::toolbar_row(ui, |ui| {
                             theme::field_label(ui, crate::i18n::t("clicker.mode"));
                             ui.add_space(8.0);
-                            ui.selectable_value(&mut self.mode, AppMode::CsvMode, "CSV");
-                            ui.selectable_value(
-                                &mut self.mode,
-                                AppMode::WorkflowMode,
+                            let labels = [
+                                "CSV",
                                 crate::i18n::t("clicker.mode.workflow"),
-                            );
+                            ];
+                            let selected = if self.mode == AppMode::CsvMode { 0 } else { 1 };
+                            if let Some(i) = theme::segmented_control(ui, &labels, selected) {
+                                self.mode = if i == 0 {
+                                    AppMode::CsvMode
+                                } else {
+                                    AppMode::WorkflowMode
+                                };
+                            }
                         });
 
                         ui.add_space(10.0);
                         theme::hairline(ui);
 
-                        if self.mode == AppMode::CsvMode {
-                            self.render_csv_mode(ui, ctx);
-                        } else {
-                            self.render_workflow_mode(ui, ctx);
-                        }
-
-                        ui.add_space(8.0);
-
-                        let logs = self.log_messages.lock().unwrap();
-                        if !logs.is_empty() {
-                            ui.label(
-                                egui::RichText::new(crate::i18n::t("clicker.log"))
-                                    .size(12.0)
-                                    .strong()
-                                    .color(col().MUTED),
-                            );
-                            theme::inset_frame().show(ui, |ui| {
-                                egui::ScrollArea::vertical()
-                                    .max_height(140.0)
-                                    .stick_to_bottom(true)
-                                    .show(ui, |ui| {
-                                        for msg in logs.iter() {
-                                            ui.label(
-                                                egui::RichText::new(msg)
-                                                    .size(11.5)
-                                                    .color(col().TEXT),
-                                            );
-                                        }
-                                    });
+                        // Form content scrolls independently of the log panel.
+                        egui::ScrollArea::vertical()
+                            .auto_shrink([false, false])
+                            .id_salt("clicker_form_scroll")
+                            .show(ui, |ui| {
+                                if self.mode == AppMode::CsvMode {
+                                    self.render_csv_mode(ui, ctx);
+                                } else {
+                                    self.render_workflow_mode(ui, ctx);
+                                }
                             });
+                    });
+            });
+    }
+
+    fn paint_run_log_panel(&mut self, ctx: &egui::Context) {
+        let logs = {
+            let guard = self.log_messages.lock().unwrap();
+            guard.clone()
+        };
+
+        egui::TopBottomPanel::bottom("clicker_run_log")
+            .resizable(true)
+            .default_height(168.0)
+            .min_height(88.0)
+            .max_height(420.0)
+            .frame(
+                egui::Frame::none()
+                    .fill(col().CHROME)
+                    .inner_margin(egui::Margin::symmetric(16.0, 10.0))
+                    .stroke(egui::Stroke::new(1.0, col().PANEL_EDGE)),
+            )
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(crate::i18n::t("clicker.log"))
+                            .size(12.0)
+                            .strong()
+                            .color(col().MUTED),
+                    );
+                    if !logs.is_empty() {
+                        ui.label(
+                            egui::RichText::new(format!("· {}", logs.len()))
+                                .size(11.0)
+                                .color(col().FAINT),
+                        );
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if theme::quiet_button(ui, crate::i18n::t("clicker.log.clear")).clicked() {
+                            self.log_messages.lock().unwrap().clear();
                         }
                     });
+                });
+                ui.add_space(4.0);
+
+                theme::inset_frame().show(ui, |ui| {
+                    egui::ScrollArea::vertical()
+                        .id_salt("clicker_log_scroll")
+                        .auto_shrink([false, false])
+                        .stick_to_bottom(true)
+                        .show(ui, |ui| {
+                            ui.set_min_width(ui.available_width());
+                            if logs.is_empty() {
+                                theme::empty_state(
+                                    ui,
+                                    crate::i18n::t("clicker.log.empty"),
+                                    "运行任务后，步骤结果会显示在这里",
+                                );
+                            } else {
+                                for msg in &logs {
+                                    ui.label(
+                                        egui::RichText::new(msg)
+                                            .size(11.5)
+                                            .color(col().TEXT),
+                                    );
+                                }
+                            }
+                        });
+                });
             });
     }
 
@@ -1519,7 +1610,7 @@ impl ClickerApp {
                 },
             );
             let mut pv = self.pure_vision;
-            if ui.checkbox(&mut pv, crate::i18n::t("clicker.pure_vision")).changed() {
+            if theme::themed_checkbox(ui, &mut pv, crate::i18n::t("clicker.pure_vision")).changed() {
                 self.set_pure_vision(pv);
             }
         });
@@ -1585,7 +1676,7 @@ impl ClickerApp {
                                 .color(egui::Color32::WHITE)
                                 .strong(),
                         )
-                        .fill(col().ACCENT)
+                        .fill(col().ACCENT_HOT)
                         .min_size(egui::vec2(0.0, theme::CTRL_H)),
                     )
                     .clicked()
@@ -1701,11 +1792,12 @@ impl ClickerApp {
             .show(ui, |ui| {
                 theme::toolbar_row(ui, |ui| {
                     let mut pv = self.pure_vision;
-                    if ui.checkbox(&mut pv, "纯视觉（仅匹配成功才点击）").changed() {
+                    if theme::themed_checkbox(ui, &mut pv, "纯视觉（仅匹配成功才点击）").changed()
+                    {
                         self.set_pure_vision(pv);
                     }
                     let mut dbg = self.save_match_debug;
-                    if ui.checkbox(&mut dbg, "失败时保存调试截图").changed() {
+                    if theme::themed_checkbox(ui, &mut dbg, "失败时保存调试截图").changed() {
                         self.set_save_match_debug(dbg);
                     }
                 });
@@ -1876,7 +1968,7 @@ impl ClickerApp {
                                 .color(egui::Color32::WHITE)
                                 .strong(),
                         )
-                        .fill(col().ACCENT)
+                        .fill(col().ACCENT_HOT)
                         .min_size(egui::vec2(0.0, theme::CTRL_H)),
                     )
                     .clicked()
@@ -2073,6 +2165,344 @@ fn click_at(x: i32, y: i32) {
     let _ = (x, y);
 }
 
+#[derive(Clone, Debug)]
+struct VisionHit {
+    name: String,
+    x: i32,
+    y: i32,
+}
+
+/// Per-run vision state: reuse IfVision coords for Click + grow ROI from last hits.
+#[derive(Default)]
+struct VisionSession {
+    pending: Option<VisionHit>,
+    last_by_name: std::collections::HashMap<String, (i32, i32)>,
+}
+
+impl VisionSession {
+    fn remember(&mut self, name: &str, x: i32, y: i32) {
+        self.last_by_name.insert(name.to_string(), (x, y));
+    }
+
+    fn take_pending_for(&mut self, names: &[String]) -> Option<VisionHit> {
+        let hit = self.pending.take()?;
+        if names.iter().any(|n| n == &hit.name) {
+            Some(hit)
+        } else {
+            // Wrong element — keep for nothing; drop.
+            None
+        }
+    }
+
+    fn last_for(&self, name: &str) -> Option<(i32, i32)> {
+        self.last_by_name.get(name).copied()
+    }
+}
+
+/// Expand recorded bbox (+ optional last hit) so small UI drift still hits ROI.
+fn build_dynamic_roi(
+    element: &UIElement,
+    last: Option<(i32, i32)>,
+    screen_w: i32,
+    screen_h: i32,
+) -> (i32, i32, i32, i32) {
+    const PAD: i32 = 240;
+    let mut x0 = element.bbox_x - PAD;
+    let mut y0 = element.bbox_y - PAD;
+    let mut x1 = element.bbox_x + element.bbox_width + PAD;
+    let mut y1 = element.bbox_y + element.bbox_height + PAD;
+    if let Some((cx, cy)) = last {
+        x0 = x0.min(cx - PAD);
+        y0 = y0.min(cy - PAD);
+        x1 = x1.max(cx + PAD);
+        y1 = y1.max(cy + PAD);
+    }
+    // Also cover scaled center in case bbox is tiny/wrong
+    let scaled_cx = if element.screen_width > 0 {
+        (element.center_x as f64 * screen_w as f64 / element.screen_width as f64) as i32
+    } else {
+        element.center_x
+    };
+    let scaled_cy = if element.screen_height > 0 {
+        (element.center_y as f64 * screen_h as f64 / element.screen_height as f64) as i32
+    } else {
+        element.center_y
+    };
+    x0 = x0.min(scaled_cx - PAD);
+    y0 = y0.min(scaled_cy - PAD);
+    x1 = x1.max(scaled_cx + PAD);
+    y1 = y1.max(scaled_cy + PAD);
+
+    x0 = x0.clamp(0, screen_w.saturating_sub(1));
+    y0 = y0.clamp(0, screen_h.saturating_sub(1));
+    x1 = x1.clamp(x0 + 1, screen_w);
+    y1 = y1.clamp(y0 + 1, screen_h);
+    (x0, y0, x1 - x0, y1 - y0)
+}
+
+fn locate_element(
+    element_name: &str,
+    db: &ElementDatabase,
+    element_folder: &str,
+    log: &Arc<Mutex<Vec<String>>>,
+    log_file: &str,
+    step_index: usize,
+    threshold: f32,
+    vision: &Arc<Mutex<VisionSession>>,
+    save_match_debug: bool,
+    tag: &str,
+) -> Option<VisionHit> {
+    let quiet = tag == "GoneCheck";
+    match db.load_element(element_name) {
+        Ok(Some((element, states))) => {
+            let (current_w, current_h) = screen_size();
+            let Some(state) = states.iter().find(|s| s.is_primary) else {
+                if !quiet {
+                    log_write(
+                        log,
+                        log_file,
+                        format!(
+                            "Step {}: {} — no primary state for '{}'",
+                            step_index + 1,
+                            tag,
+                            element_name
+                        ),
+                    );
+                }
+                return None;
+            };
+            let img_filename = Path::new(&state.screenshot_path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(&state.screenshot_path);
+            let template_path = format!("{}\\{}", element_folder, img_filename);
+            if !Path::new(&template_path).exists() {
+                if !quiet {
+                    log_write(
+                        log,
+                        log_file,
+                        format!(
+                            "Step {}: {} — template missing: {}",
+                            step_index + 1,
+                            tag,
+                            template_path
+                        ),
+                    );
+                }
+                return None;
+            }
+
+            let last = vision.lock().unwrap().last_for(element_name);
+            let (roi_x, roi_y, roi_w, roi_h) =
+                build_dynamic_roi(&element, last, current_w, current_h);
+            let roi_area = (roi_w as i64) * (roi_h as i64);
+            let screen_area = (current_w as i64) * (current_h as i64).max(1);
+            let roi_huge = roi_area * 10 > screen_area * 4; // >40% screen → skip ROI
+
+            if !roi_huge {
+                let roi =
+                    find_template_with_roi(&template_path, threshold, roi_x, roi_y, roi_w, roi_h);
+                if let Some((x, y)) = roi.hit {
+                    if !quiet {
+                        log_write(
+                            log,
+                            log_file,
+                            format!(
+                                "Step {}: [{} ROI] '{}' at ({}, {}) score={:.3} thr={:.2}",
+                                step_index + 1,
+                                tag,
+                                element_name,
+                                x,
+                                y,
+                                roi.best_score,
+                                threshold
+                            ),
+                        );
+                    }
+                    vision.lock().unwrap().remember(element_name, x, y);
+                    return Some(VisionHit {
+                        name: element_name.to_string(),
+                        x,
+                        y,
+                    });
+                }
+                if !quiet {
+                    log_write(
+                        log,
+                        log_file,
+                        format!(
+                            "Step {}: {} ROI miss best={:.3} thr={:.2} (pad search), trying full-screen...",
+                            step_index + 1,
+                            tag,
+                            roi.best_score,
+                            threshold
+                        ),
+                    );
+                }
+            }
+
+            let full = find_template(&template_path, threshold);
+            if let Some((x, y)) = full.hit {
+                if !quiet {
+                    log_write(
+                        log,
+                        log_file,
+                        format!(
+                            "Step {}: [{} Full] '{}' at ({}, {}) score={:.3} thr={:.2} state={}",
+                            step_index + 1,
+                            tag,
+                            element_name,
+                            x,
+                            y,
+                            full.best_score,
+                            threshold,
+                            state.state_name
+                        ),
+                    );
+                }
+                vision.lock().unwrap().remember(element_name, x, y);
+                return Some(VisionHit {
+                    name: element_name.to_string(),
+                    x,
+                    y,
+                });
+            }
+            if !quiet {
+                log_write(
+                    log,
+                    log_file,
+                    format!(
+                        "Step {}: {} miss '{}' best={:.3} thr={:.2}",
+                        step_index + 1,
+                        tag,
+                        element_name,
+                        full.best_score,
+                        threshold
+                    ),
+                );
+            }
+            if save_match_debug && !quiet {
+                save_debug_screen(element_folder, element_name, full.best_score);
+            }
+            None
+        }
+        Ok(None) => {
+            if !quiet {
+                log_write(
+                    log,
+                    log_file,
+                    format!(
+                        "Step {}: {} — element '{}' not in DB",
+                        step_index + 1,
+                        tag,
+                        element_name
+                    ),
+                );
+            }
+            None
+        }
+        Err(e) => {
+            if !quiet {
+                log_write(
+                    log,
+                    log_file,
+                    format!(
+                        "Step {}: {} DB error '{}': {}",
+                        step_index + 1,
+                        tag,
+                        element_name,
+                        e
+                    ),
+                );
+            }
+            None
+        }
+    }
+}
+
+/// After a successful click, wait until templates disappear so the next loop counts a new appearance.
+fn wait_until_elements_gone(
+    names: &[String],
+    db: &ElementDatabase,
+    element_folder: &str,
+    log: &Arc<Mutex<Vec<String>>>,
+    log_file: &str,
+    step_index: usize,
+    threshold: f32,
+    vision: &Arc<Mutex<VisionSession>>,
+    state: &Arc<Mutex<AppState>>,
+) {
+    const TIMEOUT_MS: u64 = 8_000;
+    const POLL_MS: u64 = 250;
+    let started = std::time::Instant::now();
+    let label = names.join(" or ");
+    log_write(
+        log,
+        log_file,
+        format!(
+            "Step {}: waiting for '{}' to disappear (≤{}ms)...",
+            step_index + 1,
+            label,
+            TIMEOUT_MS
+        ),
+    );
+    loop {
+        {
+            let s = state.lock().unwrap();
+            if *s != AppState::Running && *s != AppState::Paused {
+                return;
+            }
+        }
+        let mut still = false;
+        for name in names {
+            if locate_element(
+                name,
+                db,
+                element_folder,
+                log,
+                log_file,
+                step_index,
+                threshold,
+                vision,
+                false,
+                "GoneCheck",
+            )
+            .is_some()
+            {
+                still = true;
+                break;
+            }
+        }
+        if !still {
+            log_write(
+                log,
+                log_file,
+                format!(
+                    "Step {}: '{}' gone after {}ms",
+                    step_index + 1,
+                    label,
+                    started.elapsed().as_millis()
+                ),
+            );
+            return;
+        }
+        if started.elapsed().as_millis() as u64 >= TIMEOUT_MS {
+            log_write(
+                log,
+                log_file,
+                format!(
+                    "Step {}: '{}' still visible after {}ms — continue anyway",
+                    step_index + 1,
+                    label,
+                    TIMEOUT_MS
+                ),
+            );
+            return;
+        }
+        thread::sleep(Duration::from_millis(POLL_MS));
+    }
+}
+
 fn try_execute_click(
     element_name: &str,
     db: &ElementDatabase,
@@ -2084,121 +2514,26 @@ fn try_execute_click(
     threshold: f32,
     pure_vision: bool,
     save_match_debug: bool,
+    vision: &Arc<Mutex<VisionSession>>,
 ) -> bool {
     match db.load_element(element_name) {
-        Ok(Some((element, states))) => {
+        Ok(Some((element, _states))) => {
             let (current_w, current_h) = screen_size();
-            let primary_state = states.iter().find(|s| s.is_primary);
+            let matched = locate_element(
+                element_name,
+                db,
+                element_folder,
+                log,
+                log_file,
+                step_index,
+                threshold,
+                vision,
+                save_match_debug,
+                "Click",
+            );
 
-            let matched = if let Some(state) = primary_state {
-                let img_filename = Path::new(&state.screenshot_path)
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or(&state.screenshot_path);
-                let template_path = format!("{}\\{}", element_folder, img_filename);
-
-                if Path::new(&template_path).exists() {
-                    let roi_x = element.bbox_x.max(0);
-                    let roi_y = element.bbox_y.max(0);
-                    let roi_width = element.bbox_width.min(current_w - roi_x);
-                    let roi_height = element.bbox_height.min(current_h - roi_y);
-
-                    let roi = find_template_with_roi(
-                        &template_path,
-                        threshold,
-                        roi_x,
-                        roi_y,
-                        roi_width,
-                        roi_height,
-                    );
-                    if let Some((x, y)) = roi.hit {
-                        log_write(
-                            log,
-                            log_file,
-                            format!(
-                                "Step {}: [ROI Match] '{}' at ({}, {}) score={:.3} thr={:.2} state={}",
-                                step_index + 1,
-                                element_name,
-                                x,
-                                y,
-                                roi.best_score,
-                                threshold,
-                                state.state_name
-                            ),
-                        );
-                        Some((x, y))
-                    } else {
-                        log_write(
-                            log,
-                            log_file,
-                            format!(
-                                "Step {}: ROI miss best={:.3} thr={:.2}, trying full-screen...",
-                                step_index + 1,
-                                roi.best_score,
-                                threshold
-                            ),
-                        );
-                        let full = find_template(&template_path, threshold);
-                        if let Some((x, y)) = full.hit {
-                            log_write(
-                                log,
-                                log_file,
-                                format!(
-                                    "Step {}: [Full-Screen Match] '{}' at ({}, {}) score={:.3} thr={:.2} state={}",
-                                    step_index + 1,
-                                    element_name,
-                                    x,
-                                    y,
-                                    full.best_score,
-                                    threshold,
-                                    state.state_name
-                                ),
-                            );
-                            Some((x, y))
-                        } else {
-                            log_write(
-                                log,
-                                log_file,
-                                format!(
-                                    "Step {}: Full-screen miss best={:.3} thr={:.2}",
-                                    step_index + 1,
-                                    full.best_score,
-                                    threshold
-                                ),
-                            );
-                            if save_match_debug {
-                                save_debug_screen(element_folder, element_name, full.best_score);
-                            }
-                            None
-                        }
-                    }
-                } else {
-                    log_write(
-                        log,
-                        log_file,
-                        format!(
-                            "Step {}: template missing: {}",
-                            step_index + 1,
-                            template_path
-                        ),
-                    );
-                    None
-                }
-            } else {
-                log_write(
-                    log,
-                    log_file,
-                    format!(
-                        "Step {}: no primary state for '{}'",
-                        step_index + 1,
-                        element_name
-                    ),
-                );
-                None
-            };
-
-            let (click_x, click_y) = if let Some(xy) = matched {
-                xy
+            let (click_x, click_y) = if let Some(hit) = matched {
+                (hit.x, hit.y)
             } else if pure_vision {
                 log_write(
                     log,
@@ -2248,6 +2583,10 @@ fn try_execute_click(
                 ),
             );
             click_at(click_x, click_y);
+            vision
+                .lock()
+                .unwrap()
+                .remember(element_name, click_x, click_y);
             thread::sleep(Duration::from_millis(delay));
             true
         }
@@ -2279,7 +2618,7 @@ fn try_execute_click(
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug)]
 enum ClickOutcome {
     Ok,
     Failed,
@@ -2300,8 +2639,41 @@ fn execute_click_with_retries(
     retry_ms: u64,
     on_fail: ClickFailAction,
     save_match_debug: bool,
+    vision: &Arc<Mutex<VisionSession>>,
+    app_state: &Arc<Mutex<AppState>>,
 ) -> ClickOutcome {
     let label = names.join(" or ");
+
+    // Reuse fresh IfVision hit — skip a second full search in the same loop turn.
+    if let Some(hit) = vision.lock().unwrap().take_pending_for(names) {
+        log_write(
+            log,
+            log_file,
+            format!(
+                "Step {}: reuse IfVision hit '{}' @({}, {}) — click without re-scan",
+                step_index + 1,
+                hit.name,
+                hit.x,
+                hit.y
+            ),
+        );
+        click_at(hit.x, hit.y);
+        vision.lock().unwrap().remember(&hit.name, hit.x, hit.y);
+        thread::sleep(Duration::from_millis(delay));
+        wait_until_elements_gone(
+            names,
+            db,
+            element_folder,
+            log,
+            log_file,
+            step_index,
+            threshold,
+            vision,
+            app_state,
+        );
+        return ClickOutcome::Ok;
+    }
+
     let total_tries = retries.saturating_add(1);
     for attempt in 0..total_tries {
         if attempt > 0 {
@@ -2331,6 +2703,7 @@ fn execute_click_with_retries(
                 threshold,
                 pure_vision,
                 save_match_debug && last_try,
+                vision,
             ) {
                 if names.len() > 1 {
                     log_write(
@@ -2339,6 +2712,17 @@ fn execute_click_with_retries(
                         format!("Step {}: OR hit '{}' (of {})", step_index + 1, name, label),
                     );
                 }
+                wait_until_elements_gone(
+                    names,
+                    db,
+                    element_folder,
+                    log,
+                    log_file,
+                    step_index,
+                    threshold,
+                    vision,
+                    app_state,
+                );
                 return ClickOutcome::Ok;
             }
         }
@@ -2359,6 +2743,62 @@ fn execute_click_with_retries(
             ClickOutcome::Failed
         }
     }
+}
+
+/// Vision-only probe (no click). Tries OR candidates each attempt; retries on total miss.
+fn probe_any_element(
+    names: &[String],
+    db: &ElementDatabase,
+    element_folder: &str,
+    log: &Arc<Mutex<Vec<String>>>,
+    log_file: &str,
+    step_index: usize,
+    threshold: f32,
+    retries: u32,
+    retry_ms: u64,
+    vision: &Arc<Mutex<VisionSession>>,
+) -> Option<VisionHit> {
+    let total_tries = retries.saturating_add(1);
+    for attempt in 0..total_tries {
+        if attempt > 0 {
+            log_write(
+                log,
+                log_file,
+                format!(
+                    "Step {}: vision probe retry {}/{} after {}ms",
+                    step_index + 1,
+                    attempt,
+                    retries,
+                    retry_ms
+                ),
+            );
+            thread::sleep(Duration::from_millis(retry_ms));
+        }
+        for name in names {
+            if let Some(hit) = locate_element(
+                name,
+                db,
+                element_folder,
+                log,
+                log_file,
+                step_index,
+                threshold,
+                vision,
+                false,
+                "Probe",
+            ) {
+                if names.len() > 1 {
+                    log_write(
+                        log,
+                        log_file,
+                        format!("Step {}: OR vision hit '{}'", step_index + 1, name),
+                    );
+                }
+                return Some(hit);
+            }
+        }
+    }
+    None
 }
 
 fn save_debug_screen(element_folder: &str, element_name: &str, best_score: f32) {
@@ -2391,7 +2831,15 @@ fn save_debug_screen(element_folder: &str, element_name: &str, best_score: f32) 
 }
 
 fn log_write(log: &Arc<Mutex<Vec<String>>>, log_file: &str, msg: String) {
-    log.lock().unwrap().push(msg.clone());
+    {
+        let mut guard = log.lock().unwrap();
+        guard.push(msg.clone());
+        const MAX_UI_LOG: usize = 500;
+        if guard.len() > MAX_UI_LOG {
+            let drop_n = guard.len() - MAX_UI_LOG;
+            guard.drain(0..drop_n);
+        }
+    }
     if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(log_file) {
         let _ = writeln!(f, "{}", msg);
     }
@@ -2468,183 +2916,6 @@ fn skip_after_matching_loop_end(steps: &[WorkflowStep], head_pc: usize) -> usize
         }
     }
     steps.len()
-}
-
-/// Vision-only probe (no click). Tries OR candidates each attempt; retries on total miss.
-fn probe_any_element(
-    names: &[String],
-    db: &ElementDatabase,
-    element_folder: &str,
-    log: &Arc<Mutex<Vec<String>>>,
-    log_file: &str,
-    step_index: usize,
-    threshold: f32,
-    retries: u32,
-    retry_ms: u64,
-) -> bool {
-    let total_tries = retries.saturating_add(1);
-    for attempt in 0..total_tries {
-        if attempt > 0 {
-            log_write(
-                log,
-                log_file,
-                format!(
-                    "Step {}: vision probe retry {}/{} after {}ms",
-                    step_index + 1,
-                    attempt,
-                    retries,
-                    retry_ms
-                ),
-            );
-            thread::sleep(Duration::from_millis(retry_ms));
-        }
-        for name in names {
-            if probe_element_once(
-                name,
-                db,
-                element_folder,
-                log,
-                log_file,
-                step_index,
-                threshold,
-            ) {
-                if names.len() > 1 {
-                    log_write(
-                        log,
-                        log_file,
-                        format!("Step {}: OR vision hit '{}'", step_index + 1, name),
-                    );
-                }
-                return true;
-            }
-        }
-    }
-    false
-}
-
-fn probe_element_once(
-    element_name: &str,
-    db: &ElementDatabase,
-    element_folder: &str,
-    log: &Arc<Mutex<Vec<String>>>,
-    log_file: &str,
-    step_index: usize,
-    threshold: f32,
-) -> bool {
-    match db.load_element(element_name) {
-        Ok(Some((element, states))) => {
-            let (current_w, current_h) = screen_size();
-            let Some(state) = states.iter().find(|s| s.is_primary) else {
-                log_write(
-                    log,
-                    log_file,
-                    format!(
-                        "Step {}: probe — no primary state for '{}'",
-                        step_index + 1,
-                        element_name
-                    ),
-                );
-                return false;
-            };
-            let img_filename = Path::new(&state.screenshot_path)
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or(&state.screenshot_path);
-            let template_path = format!("{}\\{}", element_folder, img_filename);
-            if !Path::new(&template_path).exists() {
-                log_write(
-                    log,
-                    log_file,
-                    format!(
-                        "Step {}: probe — template missing: {}",
-                        step_index + 1,
-                        template_path
-                    ),
-                );
-                return false;
-            }
-
-            let roi_x = element.bbox_x.max(0);
-            let roi_y = element.bbox_y.max(0);
-            let roi_width = element.bbox_width.min(current_w - roi_x);
-            let roi_height = element.bbox_height.min(current_h - roi_y);
-
-            let roi = find_template_with_roi(
-                &template_path,
-                threshold,
-                roi_x,
-                roi_y,
-                roi_width,
-                roi_height,
-            );
-            if roi.hit.is_some() {
-                log_write(
-                    log,
-                    log_file,
-                    format!(
-                        "Step {}: [Probe ROI] '{}' score={:.3} thr={:.2}",
-                        step_index + 1,
-                        element_name,
-                        roi.best_score,
-                        threshold
-                    ),
-                );
-                return true;
-            }
-            let full = find_template(&template_path, threshold);
-            if full.hit.is_some() {
-                log_write(
-                    log,
-                    log_file,
-                    format!(
-                        "Step {}: [Probe Full] '{}' score={:.3} thr={:.2}",
-                        step_index + 1,
-                        element_name,
-                        full.best_score,
-                        threshold
-                    ),
-                );
-                return true;
-            }
-            log_write(
-                log,
-                log_file,
-                format!(
-                    "Step {}: probe miss '{}' best={:.3} thr={:.2}",
-                    step_index + 1,
-                    element_name,
-                    full.best_score,
-                    threshold
-                ),
-            );
-            false
-        }
-        Ok(None) => {
-            log_write(
-                log,
-                log_file,
-                format!(
-                    "Step {}: probe — element '{}' not in DB",
-                    step_index + 1,
-                    element_name
-                ),
-            );
-            false
-        }
-        Err(e) => {
-            log_write(
-                log,
-                log_file,
-                format!(
-                    "Step {}: probe DB error '{}': {}",
-                    step_index + 1,
-                    element_name,
-                    e
-                ),
-            );
-            false
-        }
-    }
 }
 
 fn capture_screen_rgba() -> Option<ImageBuffer<Rgba<u8>, Vec<u8>>> {

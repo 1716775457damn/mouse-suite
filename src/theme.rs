@@ -1,4 +1,4 @@
-//! Visual system — light & dark Apple-inspired palettes.
+//! Visual system — light & dark teal brand palettes (MASTER + desktop chrome).
 
 use eframe::egui::{
     self, Color32, FontFamily, FontId, Frame, Margin, RichText, Rounding, Sense, Stroke, Ui, Vec2,
@@ -129,87 +129,96 @@ pub struct Palette {
     pub NODE_BG: Color32,
     pub NODE_SEL: Color32,
     pub HUD_BG: Color32,
+    pub HUD_TEXT: Color32,
+    pub HUD_MUTED: Color32,
+    pub HUD_EDGE: Color32,
     pub HOVER_BG: Color32,
     pub HOVER_EDGE: Color32,
     pub CHIP_SELECTED: Color32,
 }
 
 const LIGHT: Palette = Palette {
-    BG: Color32::from_rgb(246, 246, 248),
-    CHROME: Color32::from_rgb(250, 250, 252),
+    BG: Color32::from_rgb(246, 247, 248),
+    CHROME: Color32::from_rgb(250, 251, 251),
     PANEL: Color32::from_rgb(255, 255, 255),
     PANEL_ELEVATED: Color32::from_rgb(255, 255, 255),
-    PANEL_EDGE: Color32::from_rgb(229, 229, 234),
-    INSET: Color32::from_rgb(242, 242, 247),
-    SEGMENT: Color32::from_rgb(235, 235, 240),
-    TEXT: Color32::from_rgb(29, 29, 31),
-    MUTED: Color32::from_rgb(110, 110, 115),
-    FAINT: Color32::from_rgb(174, 174, 178),
-    ACCENT: Color32::from_rgb(0, 122, 255),
-    ACCENT_HOT: Color32::from_rgb(10, 132, 255),
-    ACCENT_DIM: Color32::from_rgb(0, 102, 220),
-    ACCENT_SOFT: Color32::from_rgb(224, 236, 255),
-    STEEL: Color32::from_rgb(88, 86, 214),
-    SUCCESS: Color32::from_rgb(52, 199, 89),
-    DANGER: Color32::from_rgb(255, 59, 48),
-    WARN: Color32::from_rgb(255, 149, 0),
+    PANEL_EDGE: Color32::from_rgb(229, 231, 235),
+    INSET: Color32::from_rgb(240, 241, 243),
+    SEGMENT: Color32::from_rgb(232, 235, 234),
+    TEXT: Color32::from_rgb(19, 78, 74),
+    MUTED: Color32::from_rgb(75, 85, 99),
+    FAINT: Color32::from_rgb(107, 114, 128),
+    ACCENT: Color32::from_rgb(13, 148, 136),
+    ACCENT_HOT: Color32::from_rgb(234, 88, 12),
+    ACCENT_DIM: Color32::from_rgb(15, 118, 110),
+    ACCENT_SOFT: Color32::from_rgb(230, 247, 245),
+    STEEL: Color32::from_rgb(20, 184, 166),
+    SUCCESS: Color32::from_rgb(22, 163, 74),
+    DANGER: Color32::from_rgb(220, 38, 38),
+    WARN: Color32::from_rgb(217, 119, 6),
     CANVAS: Color32::from_rgb(28, 28, 30),
     GRID: Color32::from_rgb(44, 44, 46),
-    WIRE: Color32::from_rgb(100, 180, 255),
+    WIRE: Color32::from_rgb(94, 234, 212),
     NODE_START: Color32::from_rgb(48, 209, 88),
     NODE_END: Color32::from_rgb(142, 142, 147),
-    NODE_CLICK: Color32::from_rgb(10, 132, 255),
-    NODE_WAIT: Color32::from_rgb(255, 159, 10),
-    NODE_PAUSE: Color32::from_rgb(255, 69, 58),
+    NODE_CLICK: Color32::from_rgb(13, 148, 136),
+    NODE_WAIT: Color32::from_rgb(217, 119, 6),
+    NODE_PAUSE: Color32::from_rgb(220, 38, 38),
     NODE_MANUAL: Color32::from_rgb(94, 92, 230),
-    NODE_LOOP: Color32::from_rgb(50, 215, 175),
-    NODE_IF: Color32::from_rgb(255, 149, 0),
-    NODE_TYPE: Color32::from_rgb(100, 210, 255),
+    NODE_LOOP: Color32::from_rgb(20, 184, 166),
+    NODE_IF: Color32::from_rgb(234, 88, 12),
+    NODE_TYPE: Color32::from_rgb(45, 212, 191),
     NODE_BG: Color32::from_rgb(44, 44, 46),
-    NODE_SEL: Color32::from_rgb(10, 132, 255),
+    NODE_SEL: Color32::from_rgb(13, 148, 136),
     HUD_BG: Color32::from_rgb(28, 28, 30),
-    HOVER_BG: Color32::from_rgb(240, 247, 255),
-    HOVER_EDGE: Color32::from_rgb(174, 208, 248),
+    HUD_TEXT: Color32::from_rgb(240, 244, 242),
+    HUD_MUTED: Color32::from_rgb(156, 168, 163),
+    HUD_EDGE: Color32::from_rgb(58, 66, 62),
+    HOVER_BG: Color32::from_rgb(238, 249, 247),
+    HOVER_EDGE: Color32::from_rgb(153, 230, 216),
     CHIP_SELECTED: Color32::from_rgb(255, 255, 255),
 };
 
 const DARK: Palette = Palette {
-    BG: Color32::from_rgb(28, 28, 30),
-    CHROME: Color32::from_rgb(36, 36, 38),
-    PANEL: Color32::from_rgb(44, 44, 46),
-    PANEL_ELEVATED: Color32::from_rgb(54, 54, 56),
-    PANEL_EDGE: Color32::from_rgb(72, 72, 74),
-    INSET: Color32::from_rgb(38, 38, 40),
-    SEGMENT: Color32::from_rgb(58, 58, 60),
-    TEXT: Color32::from_rgb(245, 245, 247),
-    MUTED: Color32::from_rgb(174, 174, 178),
-    FAINT: Color32::from_rgb(120, 120, 128),
-    ACCENT: Color32::from_rgb(10, 132, 255),
-    ACCENT_HOT: Color32::from_rgb(64, 156, 255),
-    ACCENT_DIM: Color32::from_rgb(90, 170, 255),
-    ACCENT_SOFT: Color32::from_rgb(20, 48, 80),
-    STEEL: Color32::from_rgb(120, 118, 230),
-    SUCCESS: Color32::from_rgb(48, 209, 88),
-    DANGER: Color32::from_rgb(255, 69, 58),
-    WARN: Color32::from_rgb(255, 159, 10),
-    CANVAS: Color32::from_rgb(18, 18, 20),
-    GRID: Color32::from_rgb(40, 40, 44),
-    WIRE: Color32::from_rgb(100, 180, 255),
+    BG: Color32::from_rgb(20, 24, 22),
+    CHROME: Color32::from_rgb(26, 31, 29),
+    PANEL: Color32::from_rgb(35, 40, 38),
+    PANEL_ELEVATED: Color32::from_rgb(44, 50, 47),
+    PANEL_EDGE: Color32::from_rgb(58, 66, 62),
+    INSET: Color32::from_rgb(28, 33, 31),
+    SEGMENT: Color32::from_rgb(46, 53, 50),
+    TEXT: Color32::from_rgb(240, 244, 242),
+    MUTED: Color32::from_rgb(156, 168, 163),
+    FAINT: Color32::from_rgb(107, 117, 111),
+    ACCENT: Color32::from_rgb(45, 212, 191),
+    ACCENT_HOT: Color32::from_rgb(251, 146, 60),
+    ACCENT_DIM: Color32::from_rgb(153, 246, 228),
+    ACCENT_SOFT: Color32::from_rgb(22, 53, 50),
+    STEEL: Color32::from_rgb(94, 234, 212),
+    SUCCESS: Color32::from_rgb(74, 222, 128),
+    DANGER: Color32::from_rgb(248, 113, 113),
+    WARN: Color32::from_rgb(251, 191, 36),
+    CANVAS: Color32::from_rgb(14, 16, 16),
+    GRID: Color32::from_rgb(30, 36, 34),
+    WIRE: Color32::from_rgb(94, 234, 212),
     NODE_START: Color32::from_rgb(48, 209, 88),
     NODE_END: Color32::from_rgb(142, 142, 147),
-    NODE_CLICK: Color32::from_rgb(10, 132, 255),
-    NODE_WAIT: Color32::from_rgb(255, 159, 10),
-    NODE_PAUSE: Color32::from_rgb(255, 69, 58),
-    NODE_MANUAL: Color32::from_rgb(94, 92, 230),
-    NODE_LOOP: Color32::from_rgb(50, 215, 175),
-    NODE_IF: Color32::from_rgb(255, 149, 0),
-    NODE_TYPE: Color32::from_rgb(100, 210, 255),
+    NODE_CLICK: Color32::from_rgb(45, 212, 191),
+    NODE_WAIT: Color32::from_rgb(251, 191, 36),
+    NODE_PAUSE: Color32::from_rgb(248, 113, 113),
+    NODE_MANUAL: Color32::from_rgb(129, 140, 248),
+    NODE_LOOP: Color32::from_rgb(45, 212, 191),
+    NODE_IF: Color32::from_rgb(251, 146, 60),
+    NODE_TYPE: Color32::from_rgb(94, 234, 212),
     NODE_BG: Color32::from_rgb(54, 54, 58),
-    NODE_SEL: Color32::from_rgb(10, 132, 255),
-    HUD_BG: Color32::from_rgb(22, 22, 24),
-    HOVER_BG: Color32::from_rgb(48, 64, 88),
-    HOVER_EDGE: Color32::from_rgb(80, 120, 180),
-    CHIP_SELECTED: Color32::from_rgb(72, 72, 74),
+    NODE_SEL: Color32::from_rgb(45, 212, 191),
+    HUD_BG: Color32::from_rgb(18, 22, 20),
+    HUD_TEXT: Color32::from_rgb(240, 244, 242),
+    HUD_MUTED: Color32::from_rgb(156, 168, 163),
+    HUD_EDGE: Color32::from_rgb(58, 66, 62),
+    HOVER_BG: Color32::from_rgb(30, 56, 52),
+    HOVER_EDGE: Color32::from_rgb(42, 92, 84),
+    CHIP_SELECTED: Color32::from_rgb(44, 50, 47),
 };
 
 #[inline]
@@ -262,7 +271,7 @@ pub fn apply_theme_mode(ctx: &egui::Context, mode: ThemeMode) {
 
     visuals.widgets.active.bg_fill = c.ACCENT;
     visuals.widgets.active.bg_stroke = Stroke::NONE;
-    visuals.widgets.active.fg_stroke = Stroke::new(1.0, Color32::WHITE);
+    visuals.widgets.active.fg_stroke = Stroke::new(1.0, on_accent());
     visuals.widgets.active.rounding = r;
 
     visuals.widgets.open.bg_fill = c.PANEL_ELEVATED;
@@ -270,7 +279,10 @@ pub fn apply_theme_mode(ctx: &egui::Context, mode: ThemeMode) {
     visuals.widgets.open.fg_stroke = Stroke::new(1.0, c.TEXT);
     visuals.widgets.open.rounding = r;
 
-    visuals.selection.bg_fill = Color32::from_rgba_unmultiplied(0, 122, 255, 40);
+    visuals.selection.bg_fill = match mode {
+        ThemeMode::Light => Color32::from_rgba_unmultiplied(13, 148, 136, 40),
+        ThemeMode::Dark => Color32::from_rgba_unmultiplied(45, 212, 191, 48),
+    };
     visuals.selection.stroke = Stroke::new(1.0, c.ACCENT);
     visuals.hyperlink_color = c.ACCENT;
     visuals.window_rounding = Rounding::same(8.0);
@@ -354,7 +366,8 @@ pub fn paint_atmosphere(ui: &Ui) {
         let wash = if dark {
             Color32::from_rgba_unmultiplied(255, 255, 255, alpha)
         } else {
-            Color32::from_rgba_unmultiplied(255, 255, 255, alpha)
+            // Soft teal lift at the top of the window
+            Color32::from_rgba_unmultiplied(13, 148, 136, (alpha / 5).max(1))
         };
         painter.rect_filled(
             egui::Rect::from_min_max(egui::pos2(rect.left(), y0), egui::pos2(rect.right(), y1)),
@@ -431,16 +444,23 @@ pub fn tab_chip(ui: &mut Ui, selected: bool, label: &str) -> bool {
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
 
     if selected {
-        // White pill with soft shadow feel
+        // Selected pill with soft shadow feel
         ui.painter().rect_filled(
             rect.translate(egui::vec2(0.0, 0.5)),
             8.0,
             Color32::from_black_alpha(18),
         );
-        ui.painter().rect_filled(rect, 8.0, Color32::WHITE);
+        ui.painter().rect_filled(rect, 8.0, col().CHIP_SELECTED);
     } else if resp.hovered() {
-        ui.painter()
-            .rect_filled(rect, 8.0, Color32::from_white_alpha(120));
+        ui.painter().rect_filled(
+            rect,
+            8.0,
+            if matches!(theme_mode(), ThemeMode::Dark) {
+                Color32::from_white_alpha(20)
+            } else {
+                Color32::from_white_alpha(120)
+            },
+        );
     }
 
     ui.painter().galley(
@@ -465,9 +485,25 @@ pub fn paint_segment_backdrop(ui: &Ui, rect: egui::Rect) {
 /// Unified control height for toolbars / form rows (scales with `zoom_factor`).
 pub const CTRL_H: f32 = 34.0;
 
+pub fn on_accent() -> Color32 {
+    match theme_mode() {
+        ThemeMode::Light => Color32::WHITE,
+        ThemeMode::Dark => Color32::from_rgb(4, 47, 46),
+    }
+}
+
 pub fn primary_button(ui: &mut Ui, label: &str) -> egui::Response {
-    let btn = egui::Button::new(RichText::new(label).color(Color32::WHITE).strong())
+    let btn = egui::Button::new(RichText::new(label).color(on_accent()).strong())
         .fill(col().ACCENT)
+        .stroke(Stroke::NONE)
+        .min_size(Vec2::new(0.0, CTRL_H));
+    ui.add(btn)
+}
+
+/// Orange CTA for capture / run / record actions.
+pub fn cta_button(ui: &mut Ui, label: &str) -> egui::Response {
+    let btn = egui::Button::new(RichText::new(label).color(Color32::WHITE).strong())
+        .fill(col().ACCENT_HOT)
         .stroke(Stroke::NONE)
         .min_size(Vec2::new(0.0, CTRL_H));
     ui.add(btn)
@@ -500,7 +536,12 @@ pub fn quiet_button(ui: &mut Ui, label: &str) -> egui::Response {
 /// Full-width toolbox / sidebar action button.
 pub fn fill_button(ui: &mut Ui, label: &str, fill: Color32) -> egui::Response {
     let w = ui.available_width().max(80.0);
-    let btn = egui::Button::new(RichText::new(label).color(Color32::WHITE).strong())
+    let on = if fill == col().ACCENT {
+        on_accent()
+    } else {
+        Color32::WHITE
+    };
+    let btn = egui::Button::new(RichText::new(label).color(on).strong())
         .fill(fill)
         .stroke(Stroke::NONE)
         .min_size(Vec2::new(w, CTRL_H - 2.0));
@@ -531,6 +572,47 @@ pub fn hairline(ui: &mut Ui) {
     ui.add_space(10.0);
 }
 
+/// Compact divider for dense toolbars / HUD rows (less vertical gap than `hairline`).
+pub fn soft_separator(ui: &mut Ui) {
+    let rect = ui.max_rect();
+    let y = ui.cursor().top() + 2.0;
+    ui.painter()
+        .hline(rect.x_range(), y, Stroke::new(1.0, col().PANEL_EDGE));
+    ui.add_space(8.0);
+}
+
+/// Centered empty-state block for galleries / editors / log panels.
+pub fn empty_state(ui: &mut Ui, title: &str, hint: &str) {
+    let tall = ui.available_height() > 160.0;
+    ui.vertical_centered(|ui| {
+        if tall {
+            ui.add_space(28.0);
+        } else {
+            ui.add_space(8.0);
+        }
+        Frame::none()
+            .fill(col().INSET)
+            .stroke(Stroke::new(1.0, col().PANEL_EDGE))
+            .rounding(Rounding::same(10.0))
+            .inner_margin(Margin::symmetric(18.0, if tall { 18.0 } else { 10.0 }))
+            .show(ui, |ui| {
+                ui.set_max_width(360.0);
+                ui.vertical_centered(|ui| {
+                    ui.label(
+                        RichText::new(title)
+                            .size(if tall { 15.0 } else { 13.0 })
+                            .strong()
+                            .color(col().TEXT),
+                    );
+                    if !hint.is_empty() {
+                        ui.add_space(4.0);
+                        ui.label(RichText::new(hint).size(12.0).color(col().MUTED));
+                    }
+                });
+            });
+    });
+}
+
 pub fn field_label(ui: &mut Ui, text: &str) {
     ui.label(RichText::new(text).size(12.0).strong().color(col().MUTED));
 }
@@ -550,11 +632,8 @@ pub fn list_row(ui: &mut Ui, selected: bool, label: &str) -> egui::Response {
     };
     ui.painter().rect_filled(rect, 8.0, bg);
     if selected {
-        ui.painter().rect_stroke(
-            rect,
-            8.0,
-            Stroke::new(1.0, Color32::from_rgb(180, 210, 255)),
-        );
+        ui.painter()
+            .rect_stroke(rect, 8.0, Stroke::new(1.0, col().HOVER_EDGE));
     }
 
     let color = if selected {
@@ -715,4 +794,46 @@ pub enum StatusTone {
     Run,
     Warn,
     Danger,
+}
+
+/// Themed checkbox with accent-colored check when selected.
+pub fn themed_checkbox(ui: &mut Ui, checked: &mut bool, label: impl Into<egui::WidgetText>) -> egui::Response {
+    ui.add(egui::Checkbox::new(checked, label))
+}
+
+/// Single-line text edit with accent focus ring via global visuals.
+pub fn themed_text_edit(ui: &mut Ui, text: &mut String) -> egui::Response {
+    ui.add(
+        egui::TextEdit::singleline(text)
+            .desired_width(ui.available_width())
+            .margin(egui::vec2(10.0, 6.0)),
+    )
+}
+
+/// Modal / dialog window shell with panel fill and edge stroke.
+pub fn themed_window(title: impl Into<egui::WidgetText>) -> egui::Window<'static> {
+    let c = col();
+    egui::Window::new(title)
+        .frame(
+            Frame::none()
+                .fill(c.PANEL)
+                .stroke(Stroke::new(1.0, c.PANEL_EDGE))
+                .rounding(Rounding::same(12.0))
+                .inner_margin(Margin::same(16.0))
+                .shadow(egui::Shadow {
+                    offset: [0.0, 8.0].into(),
+                    blur: 24.0,
+                    spread: 0.0,
+                    color: Color32::from_black_alpha(if matches!(theme_mode(), ThemeMode::Dark) {
+                        80
+                    } else {
+                        28
+                    }),
+                }),
+        )
+}
+
+/// Section title used inside modals (replaces raw `ui.heading`).
+pub fn modal_title(ui: &mut Ui, title: &str) {
+    ui.label(RichText::new(title).size(18.0).strong().color(col().TEXT));
 }

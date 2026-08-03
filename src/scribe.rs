@@ -443,6 +443,13 @@ impl ScribeApp {
             ])
             .max_size([screen.width() * 0.94, screen.height() * 0.94])
             .order(egui::Order::Foreground)
+            .frame(
+                egui::Frame::none()
+                    .fill(theme::col().PANEL)
+                    .stroke(egui::Stroke::new(1.0, theme::col().PANEL_EDGE))
+                    .rounding(egui::Rounding::same(12.0))
+                    .inner_margin(egui::Margin::same(12.0)),
+            )
             .show(ctx, |ui| {
                 if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                     close = true;
@@ -819,7 +826,7 @@ impl ScribeApp {
                                 {
                                     self.stop_recording(ctx);
                                 }
-                            } else if theme::primary_button(
+                            } else if theme::cta_button(
                                 ui,
                                 crate::i18n::t("scribe.btn.start"),
                             )
@@ -828,7 +835,8 @@ impl ScribeApp {
                                 self.start_recording(ctx);
                             }
                             ui.add_space(8.0);
-                            ui.checkbox(
+                            theme::themed_checkbox(
+                                ui,
                                 &mut self.minimize_on_record,
                                 crate::i18n::t("scribe.minimize"),
                             );
@@ -872,7 +880,8 @@ impl ScribeApp {
                                         self.build_flow_draft();
                                     }
                                     if ui
-                                        .add_enabled(can, egui::Button::new("JSON"))
+                                        .add_enabled_ui(can, |ui| theme::secondary_button(ui, "JSON"))
+                                        .inner
                                         .clicked()
                                     {
                                         match self.export_json() {
@@ -883,7 +892,10 @@ impl ScribeApp {
                                         }
                                     }
                                     if ui
-                                        .add_enabled(can, egui::Button::new("Markdown"))
+                                        .add_enabled_ui(can, |ui| {
+                                            theme::secondary_button(ui, "Markdown")
+                                        })
+                                        .inner
                                         .clicked()
                                     {
                                         match self.export_markdown() {
@@ -894,7 +906,8 @@ impl ScribeApp {
                                         }
                                     }
                                     if ui
-                                        .add_enabled(can, egui::Button::new("HTML"))
+                                        .add_enabled_ui(can, |ui| theme::secondary_button(ui, "HTML"))
+                                        .inner
                                         .clicked()
                                     {
                                         match self.export_html() {
@@ -927,23 +940,23 @@ impl ScribeApp {
                     ui.add_space(8.0);
                     theme::hairline(ui);
                     theme::field_label(ui, crate::i18n::t("scribe.ai.provider"));
-                    ui.horizontal(|ui| {
-                        ui.selectable_value(
-                            &mut self.ai_cfg.provider,
-                            AiProvider::Ccswitch,
-                            crate::i18n::t("scribe.ai.ccswitch"),
-                        );
-                        ui.selectable_value(
-                            &mut self.ai_cfg.provider,
-                            AiProvider::Glm,
-                            crate::i18n::t("scribe.ai.glm"),
-                        );
-                        ui.selectable_value(
-                            &mut self.ai_cfg.provider,
-                            AiProvider::Custom,
-                            crate::i18n::t("scribe.ai.custom"),
-                        );
-                    });
+                    let providers = [
+                        crate::i18n::t("scribe.ai.ccswitch"),
+                        crate::i18n::t("scribe.ai.glm"),
+                        crate::i18n::t("scribe.ai.custom"),
+                    ];
+                    let selected = match self.ai_cfg.provider {
+                        AiProvider::Ccswitch => 0,
+                        AiProvider::Glm => 1,
+                        AiProvider::Custom => 2,
+                    };
+                    if let Some(i) = theme::segmented_control(ui, &providers, selected) {
+                        self.ai_cfg.provider = match i {
+                            1 => AiProvider::Glm,
+                            2 => AiProvider::Custom,
+                            _ => AiProvider::Ccswitch,
+                        };
+                    }
                     match self.ai_cfg.provider {
                         AiProvider::Glm => {
                             ui.add(
@@ -1032,9 +1045,16 @@ impl ScribeApp {
                         ui.set_width(ui.available_width());
                         let ids = self.sessions.clone();
                         if ids.is_empty() {
+                            ui.add_space(8.0);
                             ui.label(
                                 RichText::new(crate::i18n::t("scribe.no_sessions"))
                                     .size(12.0)
+                                    .color(theme::col().MUTED),
+                            );
+                            ui.add_space(4.0);
+                            ui.label(
+                                RichText::new("开始录制后会自动出现在此列表")
+                                    .size(11.0)
                                     .color(theme::col().FAINT),
                             );
                         }
@@ -1045,11 +1065,11 @@ impl ScribeApp {
                                 self.load_session(&id, ctx);
                             }
                             resp.context_menu(|ui| {
-                                if ui.button("复制会话").clicked() {
+                                if theme::secondary_button(ui, "复制会话").clicked() {
                                     self.duplicate_session(&id, ctx);
                                     ui.close_menu();
                                 }
-                                if ui.button("删除会话").clicked() {
+                                if theme::danger_button(ui, "删除会话").clicked() {
                                     self.delete_session(&id);
                                     ui.close_menu();
                                 }
@@ -1096,14 +1116,11 @@ impl ScribeApp {
         }
 
         if self.session.is_none() {
-            ui.vertical_centered(|ui| {
-                ui.add_space(48.0);
-                ui.label(
-                    RichText::new(crate::i18n::t("scribe.empty"))
-                        .size(15.0)
-                        .color(theme::col().MUTED),
-                );
-            });
+            theme::empty_state(
+                ui,
+                crate::i18n::t("scribe.empty"),
+                "点击上方「开始录制」，或从左侧选择一个会话",
+            );
             return;
         }
 
@@ -1256,7 +1273,7 @@ impl ScribeApp {
                         egui::Image::new((tex.id(), disp))
                             .fit_to_exact_size(disp)
                             .rounding(8.0)
-                            .bg_fill(Color32::from_rgb(245, 247, 250))
+                            .bg_fill(theme::col().INSET)
                             .sense(egui::Sense::click()),
                     );
                     ui.painter().rect_stroke(

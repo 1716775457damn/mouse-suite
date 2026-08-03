@@ -1,7 +1,7 @@
-//! Single global low-level mouse hook shared by recorder (marquee) and scribe (click docs).
+//! Single global low-level mouse hook shared by recorder (marquee),
+//! scribe (doc clicks), and flow click-recording.
 //!
 //! Windows only allows one reliable `rdev::grab` / `listen` pipeline per process.
-//! Running both at once makes document recording receive zero clicks.
 
 use rdev::{grab, Button, Event, EventType};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -17,12 +17,29 @@ pub enum RecorderMsg {
     Move(f64, f64),
 }
 
+/// Flow click-record event: screen coords + whether Alt was held (precise marquee).
+pub type FlowClick = (i32, i32, bool);
+
 pub type IgnoreRect = Arc<Mutex<Option<(i32, i32, i32, i32)>>>;
+
+fn alt_held() -> bool {
+    #[cfg(windows)]
+    {
+        use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
+        // VK_MENU = 0x12 (either Alt key)
+        unsafe { GetAsyncKeyState(0x12) as u16 & 0x8000 != 0 }
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
 
 #[derive(Clone)]
 pub struct MouseHook {
     pub recorder_flag: Arc<AtomicBool>,
     pub scribe_flag: Arc<AtomicBool>,
+    pub flow_flag: Arc<AtomicBool>,
     pub scribe_ignore: IgnoreRect,
 }
 
@@ -31,13 +48,16 @@ impl MouseHook {
     pub fn start(
         recorder_tx: Sender<RecorderMsg>,
         scribe_click_tx: Sender<(i32, i32)>,
+        flow_click_tx: Sender<FlowClick>,
     ) -> Self {
         let recorder_flag = Arc::new(AtomicBool::new(false));
         let scribe_flag = Arc::new(AtomicBool::new(false));
+        let flow_flag = Arc::new(AtomicBool::new(false));
         let scribe_ignore: IgnoreRect = Arc::new(Mutex::new(None));
 
         let rf = recorder_flag.clone();
         let sf = scribe_flag.clone();
+        let ff = flow_flag.clone();
         let ignore = scribe_ignore.clone();
 
         thread::spawn(move || {
@@ -46,6 +66,7 @@ impl MouseHook {
             let cb = move |event: Event| -> Option<Event> {
                 let capturing = rf.load(Ordering::Relaxed);
                 let scribing = sf.load(Ordering::Relaxed);
+                let flow_rec = ff.load(Ordering::Relaxed);
                 match event.event_type {
                     EventType::MouseMove { x, y } => {
                         if let Ok(mut pos) = last_cb.lock() {
@@ -66,9 +87,9 @@ impl MouseHook {
                             // Swallow so the drag does not click through the overlay.
                             return None;
                         }
+                        let xi = x as i32;
+                        let yi = y as i32;
                         if scribing {
-                            let xi = x as i32;
-                            let yi = y as i32;
                             let blocked = ignore
                                 .lock()
                                 .ok()
@@ -78,6 +99,11 @@ impl MouseHook {
                             if !blocked {
                                 let _ = scribe_click_tx.send((xi, yi));
                             }
+                        }
+                        if flow_rec {
+                            // Do not swallow — the real UI must receive the click.
+                            let precise = alt_held();
+                            let _ = flow_click_tx.send((xi, yi, precise));
                         }
                         Some(event)
                     }
@@ -103,6 +129,7 @@ impl MouseHook {
         Self {
             recorder_flag,
             scribe_flag,
+            flow_flag,
             scribe_ignore,
         }
     }

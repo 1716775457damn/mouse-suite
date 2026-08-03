@@ -461,6 +461,71 @@ impl RecorderApp {
         self.begin_capture(ctx, false);
     }
 
+    /// Whether an element with this name already exists in the library.
+    pub fn has_element(&self, name: &str) -> bool {
+        self.elements.iter().any(|e| e.name == name)
+    }
+
+    /// Drop a leftover forced name (e.g. cancelled precise capture during flow record).
+    pub fn clear_forced_element_name(&mut self) {
+        self.forced_element_name = None;
+    }
+
+    /// Auto-crop a template around a screen click and upsert as `name` (state `-n`).
+    /// Same ROI + screen metadata path as marquee capture (`upsert_elem`).
+    /// Used by Flow page click-recording (auto names like `click_YYYYMMDD_HHMMSS_001`).
+    pub fn save_click_crop(&mut self, name: &str, screen_x: i32, screen_y: i32) -> Result<(), String> {
+        // ~160×96 around click — large enough for typical buttons, small enough for NCC.
+        const HALF_W: i32 = 80;
+        const HALF_H: i32 = 48;
+        // Let the pressed UI settle before grabbing pixels.
+        thread::sleep(Duration::from_millis(70));
+        let cap = crate::screen::capture_at_point(screen_x, screen_y)?;
+        let lx = (screen_x - cap.x).clamp(0, cap.width.saturating_sub(1) as i32);
+        let ly = (screen_y - cap.y).clamp(0, cap.height.saturating_sub(1) as i32);
+        let x1 = (lx - HALF_W).max(0);
+        let y1 = (ly - HALF_H).max(0);
+        let x2 = (lx + HALF_W).min(cap.width as i32);
+        let y2 = (ly + HALF_H).min(cap.height as i32);
+        if x2 - x1 < 8 || y2 - y1 < 8 {
+            return Err("crop too small".into());
+        }
+        let cw = (x2 - x1) as u32;
+        let ch = (y2 - y1) as u32;
+        let mut cropped = image::RgbaImage::new(cw, ch);
+        for py in 0..ch {
+            for px in 0..cw {
+                let p = *cap.image.get_pixel((x1 as u32) + px, (y1 as u32) + py);
+                cropped.put_pixel(px, py, p);
+            }
+        }
+        let state_name = "-n";
+        let dest = std::path::Path::new(&self.image_dir).join(format!("{}_{}.png", name, state_name));
+        cropped
+            .save(&dest)
+            .map_err(|e| format!("save template: {e}"))?;
+        // Absolute screen coords for ROI matching.
+        let abs_x1 = cap.x + x1;
+        let abs_y1 = cap.y + y1;
+        let abs_x2 = cap.x + x2;
+        let abs_y2 = cap.y + y2;
+        upsert_elem(
+            &self.conn,
+            name,
+            state_name,
+            abs_x1,
+            abs_y1,
+            abs_x2,
+            abs_y2,
+            &dest.to_string_lossy(),
+            cap.width,
+            cap.height,
+        )?;
+        self.refresh();
+        self.status = format!("已保存点击模板「{}」", name);
+        Ok(())
+    }
+
     /// Agent entrypoint: start add-state capture for current element.
     pub fn agent_start_add_state_capture(
         &mut self,
@@ -849,6 +914,7 @@ impl RecorderApp {
                                     }
                                 }
                                 Err(e) => {
+                                    self.forced_element_name = None;
                                     self.mode = AppMode::Normal;
                                     self.status = e;
                                 }
@@ -919,7 +985,7 @@ impl RecorderApp {
                             painter.rect_stroke(
                                 sel,
                                 0.0,
-                                Stroke::new(1.0, Color32::from_rgb(30, 160, 255)),
+                                Stroke::new(1.0, theme::col().ACCENT),
                             );
 
                             for (px, py) in [(x1, y1), (x2, y1), (x1, y2), (x2, y2)] {
@@ -955,7 +1021,7 @@ impl RecorderApp {
                                 Pos2::new(lx, ly),
                                 egui::vec2(dims.len() as f32 * 8.5, 20.0),
                             );
-                            painter.rect_filled(label_bg, 3.0, Color32::from_rgb(30, 160, 255));
+                            painter.rect_filled(label_bg, 3.0, theme::col().ACCENT);
                             painter.text(
                                 label_bg.center(),
                                 egui::Align2::CENTER_CENTER,
@@ -1054,7 +1120,7 @@ impl RecorderApp {
                                             );
                                             ui.add_space(14.0);
                                             egui::Frame::none()
-                                                .fill(theme::col().ACCENT)
+                                                .fill(theme::col().ACCENT_HOT)
                                                 .rounding(egui::Rounding::same(8.0))
                                                 .inner_margin(egui::Margin::same(12.0))
                                                 .show(ui, |ui| {
@@ -1074,7 +1140,7 @@ impl RecorderApp {
                                                     let button = egui::Button::new(
                                                         egui::RichText::new(crate::i18n::t("recorder.capture.start"))
                                                             .strong()
-                                                            .color(theme::col().ACCENT_DIM),
+                                                            .color(theme::col().ACCENT_HOT),
                                                     )
                                                     .fill(egui::Color32::WHITE)
                                                     .stroke(egui::Stroke::NONE)
@@ -1215,14 +1281,19 @@ impl RecorderApp {
                                                 ui,
                                                 |ui| {
                                                     if indices.is_empty() {
-                                                        ui.label(
-                                            egui::RichText::new(if self.elements.is_empty() {
-                                                crate::i18n::t("recorder.empty")
-                                            } else {
-                                                crate::i18n::t("recorder.no_match")
-                                            })
-                                            .color(theme::col().MUTED),
-                                        );
+                                                        theme::empty_state(
+                                                            ui,
+                                                            if self.elements.is_empty() {
+                                                                crate::i18n::t("recorder.empty")
+                                                            } else {
+                                                                crate::i18n::t("recorder.no_match")
+                                                            },
+                                                            if self.elements.is_empty() {
+                                                                "使用左侧「捕捉新元素」框选屏幕区域"
+                                                            } else {
+                                                                "试试清空搜索，或换个关键词"
+                                                            },
+                                                        );
                                                         return;
                                                     }
 
@@ -1461,7 +1532,7 @@ impl RecorderApp {
                                                     Color32::RED,
                                                     "Click and drag on screen to select region",
                                                 );
-                                                if ui.button("Cancel").clicked() {
+                                                if theme::secondary_button(ui, "Cancel").clicked() {
                                                     self.end_capture(ctx);
                                                     self.mode = AppMode::Normal;
                                                     self.status = "Cancelled".into();
@@ -1481,7 +1552,7 @@ impl RecorderApp {
                                                 ui.label(prompt);
                                                 let resp = ui.text_edit_singleline(&mut self.input);
                                                 ui.horizontal(|ui| {
-                                                    if ui.button("OK").clicked()
+                                                    if theme::primary_button(ui, "OK").clicked()
                                                         || (resp.has_focus()
                                                             && ui.input_mut(|i| {
                                                                 i.key_pressed(egui::Key::Enter)
@@ -1608,7 +1679,7 @@ impl RecorderApp {
                                                             }
                                                         }
                                                     }
-                                                    if ui.button("Cancel").clicked() {
+                                                    if theme::secondary_button(ui, "Cancel").clicked() {
                                                         self.mode = AppMode::Normal;
                                                         self.input.clear();
                                                         self.status = "Cancelled".into();
