@@ -39,10 +39,11 @@ pub fn cursor_pos() -> (i32, i32) {
         use windows::Win32::Foundation::POINT;
         use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
         let mut pt = POINT { x: 0, y: 0 };
-        unsafe {
-            let _ = GetCursorPos(&mut pt);
-        }
-        if pt.x != 0 || pt.y != 0 {
+        // Trust GetCursorPos whenever the API succeeds — (0,0) is a valid
+        // screen coordinate (top-left). The old `!= 0` check treated origin as
+        // failure and returned a stale hook cache position.
+        if unsafe { GetCursorPos(&mut pt) }.is_ok() {
+            crate::mouse_hook::seed_cursor(pt.x, pt.y);
             return (pt.x, pt.y);
         }
     }

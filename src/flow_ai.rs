@@ -253,6 +253,8 @@ fn canonicalize_kind(k: &str) -> String {
         "loopstart" | "loop_start" | "for" => "LoopStart".into(),
         "loopend" | "loop_end" => "LoopEnd".into(),
         "ifvision" | "if_vision" | "if" | "condition" => "IfVision".into(),
+        "iftext" | "if_text" | "ocr_if" | "text_if" => "IfText".into(),
+        "clicktext" | "click_text" | "ocr_click" | "text_click" => "ClickText".into(),
         "loopwhile" | "loop_while" | "while" => "LoopWhile".into(),
         _ => {
             // Preserve original casing if already canonical-ish

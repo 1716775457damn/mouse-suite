@@ -10,6 +10,7 @@ mod hotkeys;
 mod i18n;
 mod interfaces;
 mod mouse_hook;
+mod ocr;
 mod recorder;
 mod screen;
 mod scribe;
@@ -69,6 +70,7 @@ impl SuiteApp {
         let recorder = RecorderApp::new(config, hook.recorder_flag.clone(), rec_rx);
         let clicker = ClickerApp::new(image_dir);
         let scribe = ScribeApp::new(hook.scribe_flag.clone(), hook.scribe_ignore.clone(), scribe_rx);
+        let hotkeys = HotkeyBus::spawn();
         Self {
             tab: Tab::Recorder,
             recorder,
@@ -76,7 +78,7 @@ impl SuiteApp {
             flow: FlowEditor::new(hook.flow_flag.clone(), flow_rx),
             scribe,
             bridge: AgentBridge::new(),
-            hotkeys: HotkeyBus::spawn(),
+            hotkeys,
         }
     }
 
@@ -106,6 +108,8 @@ impl SuiteApp {
             "loop" | "loop_start" => Some(NodeKind::LoopStart),
             "loop_end" | "endloop" => Some(NodeKind::LoopEnd),
             "if_vision" | "ifvision" => Some(NodeKind::IfVision),
+            "if_text" | "iftext" | "ocr_if" => Some(NodeKind::IfText),
+            "click_text" | "clicktext" | "ocr_click" => Some(NodeKind::ClickText),
             "loop_while" | "while_match" => Some(NodeKind::LoopWhile),
             "type" | "type_text" | "keys" | "keyboard" => Some(NodeKind::TypeText),
             _ => None,
@@ -492,6 +496,8 @@ impl SuiteApp {
                             NodeKind::LoopStart => "loop",
                             NodeKind::LoopEnd => "loop_end",
                             NodeKind::IfVision => "if_vision",
+                            NodeKind::IfText => "if_text",
+                            NodeKind::ClickText => "click_text",
                             NodeKind::LoopWhile => "loop_while",
                             NodeKind::TypeText => "type",
                         };
@@ -529,13 +535,39 @@ impl SuiteApp {
     fn traffic_light(ui: &mut egui::Ui, color: egui::Color32, id: &str) -> egui::Response {
         let (rect, response) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::click());
         let center = rect.center();
-        let edge = if response.hovered() {
-            egui::Color32::from_rgba_unmultiplied(0, 0, 0, 74)
+        let hovered = response.hovered();
+        let edge = if hovered {
+            egui::Color32::from_rgba_unmultiplied(0, 0, 0, 80)
         } else {
-            egui::Color32::from_rgba_unmultiplied(0, 0, 0, 36)
+            egui::Color32::from_rgba_unmultiplied(0, 0, 0, 30)
         };
         ui.painter().circle_filled(center, 6.0, color);
         ui.painter().circle_stroke(center, 6.0, egui::Stroke::new(0.8, edge));
+        // Show action symbol on hover: × close, − minimize, + maximize
+        if hovered {
+            let sym = if id.contains("close") || id.contains("关闭") {
+                "×"
+            } else if id.contains("minimi") || id.contains("最小") {
+                "−"
+            } else {
+                "+"
+            };
+            let galley = ui.fonts(|f| {
+                f.layout_no_wrap(
+                    sym.to_owned(),
+                    egui::FontId::new(9.0, egui::FontFamily::Proportional),
+                    egui::Color32::from_rgba_unmultiplied(0, 0, 0, 140),
+                )
+            });
+            ui.painter().galley(
+                egui::pos2(
+                    center.x - galley.size().x * 0.5,
+                    center.y - galley.size().y * 0.5,
+                ),
+                galley,
+                egui::Color32::TRANSPARENT,
+            );
+        }
         response.on_hover_text(id)
     }
 
@@ -776,6 +808,22 @@ impl SuiteApp {
                     full_rect.bottom() - 0.5,
                     egui::Stroke::new(1.0, theme::col().PANEL_EDGE),
                 );
+
+                // Running/recording accent stripe at the very bottom of chrome
+                let busy_color = if self.clicker.is_busy() {
+                    Some(theme::col().SUCCESS)
+                } else if self.scribe.is_recording() || self.flow.is_click_recording() {
+                    Some(theme::col().DANGER)
+                } else {
+                    None
+                };
+                if let Some(stripe_color) = busy_color {
+                    let stripe = egui::Rect::from_min_size(
+                        egui::pos2(full_rect.left(), full_rect.bottom() - 2.5),
+                        egui::vec2(full_rect.width(), 2.5),
+                    );
+                    ui.painter().rect_filled(stripe, 0.0, stripe_color);
+                }
             });
     }
 }
@@ -811,12 +859,16 @@ impl eframe::App for SuiteApp {
                                 self.clicker.agent_set_workflow_steps(steps);
                                 if let Err(e) = self.clicker.agent_start_workflow(ctx) {
                                     self.flow.set_run_highlight(None);
-                                    let _ = e;
+                                    self.flow.set_status(format!("热键启动失败: {e}"));
+                                    self.tab = Tab::Flow;
                                 } else {
                                     self.tab = Tab::Flow;
                                 }
                             }
-                            Err(_) => {}
+                            Err(e) => {
+                                self.flow.set_status(format!("热键启动失败: {e}"));
+                                self.tab = Tab::Flow;
+                            }
                         }
                     }
                 }

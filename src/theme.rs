@@ -180,10 +180,10 @@ const LIGHT: Palette = Palette {
 };
 
 const DARK: Palette = Palette {
-    BG: Color32::from_rgb(20, 24, 22),
-    CHROME: Color32::from_rgb(26, 31, 29),
-    PANEL: Color32::from_rgb(35, 40, 38),
-    PANEL_ELEVATED: Color32::from_rgb(44, 50, 47),
+    BG: Color32::from_rgb(18, 22, 20),
+    CHROME: Color32::from_rgb(24, 29, 27),
+    PANEL: Color32::from_rgb(33, 38, 36),
+    PANEL_ELEVATED: Color32::from_rgb(42, 48, 45),
     PANEL_EDGE: Color32::from_rgb(58, 66, 62),
     INSET: Color32::from_rgb(28, 33, 31),
     SEGMENT: Color32::from_rgb(46, 53, 50),
@@ -351,23 +351,23 @@ pub fn paint_atmosphere(ui: &Ui) {
     let c = col();
     painter.rect_filled(rect, 0.0, c.BG);
 
-    let band_h = 180.0_f32.min(rect.height() * 0.35);
-    let steps = 24;
+    let band_h = 200.0_f32.min(rect.height() * 0.40);
+    let steps = 28;
     let dark = matches!(theme_mode(), ThemeMode::Dark);
     for i in 0..steps {
         let t0 = i as f32 / steps as f32;
         let y0 = rect.top() + band_h * t0;
         let y1 = rect.top() + band_h * ((i + 1) as f32 / steps as f32);
         let alpha = if dark {
-            ((1.0 - t0) * 28.0) as u8
+            ((1.0 - t0) * 32.0) as u8
         } else {
-            ((1.0 - t0) * 40.0) as u8
+            ((1.0 - t0) * 56.0) as u8
         };
         let wash = if dark {
             Color32::from_rgba_unmultiplied(255, 255, 255, alpha)
         } else {
             // Soft teal lift at the top of the window
-            Color32::from_rgba_unmultiplied(13, 148, 136, (alpha / 5).max(1))
+            Color32::from_rgba_unmultiplied(13, 148, 136, (alpha / 4).max(1))
         };
         painter.rect_filled(
             egui::Rect::from_min_max(egui::pos2(rect.left(), y0), egui::pos2(rect.right(), y1)),
@@ -386,27 +386,52 @@ pub fn inset_frame() -> Frame {
 }
 
 pub fn section_header(ui: &mut Ui, title: &str, subtitle: &str) {
-    ui.vertical(|ui| {
-        ui.label(RichText::new(title).size(26.0).color(col().TEXT).strong());
-        if !subtitle.is_empty() {
-            ui.add_space(2.0);
-            ui.label(RichText::new(subtitle).size(13.0).color(col().MUTED));
-        }
+    ui.horizontal(|ui| {
+        // Teal accent bar on the left
+        let (bar, _) = ui.allocate_exact_size(Vec2::new(3.0, 36.0), Sense::hover());
+        ui.painter().rect_filled(bar, 2.0, col().ACCENT);
+        ui.add_space(10.0);
+        ui.vertical(|ui| {
+            ui.label(RichText::new(title).size(24.0).color(col().TEXT).strong());
+            if !subtitle.is_empty() {
+                ui.label(RichText::new(subtitle).size(12.0).color(col().MUTED));
+            }
+        });
     });
     ui.add_space(14.0);
 }
 
 pub fn brand_title(ui: &mut Ui) {
     ui.allocate_ui_with_layout(
-        Vec2::new(168.0, 36.0),
+        Vec2::new(180.0, 36.0),
         egui::Layout::left_to_right(egui::Align::Center),
         |ui| {
+            // Mouse-icon brand mark
             let (mark, _) = ui.allocate_exact_size(Vec2::new(28.0, 28.0), Sense::hover());
-            let c = mark.center();
             let p = ui.painter();
+            let c = mark.center();
+            // Tile background
             p.rect_filled(mark, 8.0, col().ACCENT);
-            p.circle_filled(c, 5.0, Color32::from_rgba_unmultiplied(255, 255, 255, 230));
-            p.circle_stroke(c, 5.0, Stroke::new(1.5, Color32::from_white_alpha(180)));
+            // Mouse body — white rounded rect offset slightly downward
+            let body = egui::Rect::from_center_size(
+                egui::pos2(c.x, c.y + 1.5),
+                egui::vec2(11.0, 15.0),
+            );
+            p.rect_filled(body, 5.0, Color32::from_rgba_unmultiplied(255, 255, 255, 220));
+            // Left/right button divider line
+            let div_y0 = body.top() + 1.5;
+            let div_y1 = body.top() + body.height() * 0.46;
+            p.line_segment(
+                [egui::pos2(c.x, div_y0), egui::pos2(c.x, div_y1)],
+                Stroke::new(1.0, col().ACCENT),
+            );
+            // Scroll wheel — small filled circle
+            p.circle_filled(
+                egui::pos2(c.x, body.top() + body.height() * 0.30),
+                1.8,
+                col().ACCENT,
+            );
+
             ui.add_space(9.0);
             ui.vertical(|ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
@@ -615,6 +640,101 @@ pub fn empty_state(ui: &mut Ui, title: &str, hint: &str) {
 
 pub fn field_label(ui: &mut Ui, text: &str) {
     ui.label(RichText::new(text).size(12.0).strong().color(col().MUTED));
+}
+
+/// Colored log line: prefix tag  [OK] / [WARN] / [ERR] / [INFO] changes color.
+/// Plain text with no recognized prefix is rendered in muted text color.
+pub fn log_line(ui: &mut Ui, text: &str) {
+    let (prefix, rest, color) = if text.contains("] OK")
+        || text.contains("] ok")
+        || text.contains("✓")
+        || text.contains("OK ")
+    {
+        ("[OK]", text, col().SUCCESS)
+    } else if text.contains("] WARN")
+        || text.contains("] warn")
+        || text.contains("WARN ")
+        || text.contains("⚠")
+    {
+        ("[WN]", text, col().WARN)
+    } else if text.contains("] ERR")
+        || text.contains("] err")
+        || text.contains("ERR ")
+        || text.contains("✗")
+        || text.contains("FAIL")
+        || text.contains("fail")
+        || text.contains("失败")
+        || text.contains("错误")
+    {
+        ("[ER]", text, col().DANGER)
+    } else if text.contains("Loaded") || text.contains("loaded") || text.contains("已加载") {
+        ("[OK]", text, col().ACCENT)
+    } else {
+        ("", text, col().MUTED)
+    };
+
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        if !prefix.is_empty() {
+            ui.label(
+                RichText::new(prefix)
+                    .size(11.0)
+                    .strong()
+                    .monospace()
+                    .color(color),
+            );
+        }
+        ui.label(RichText::new(rest).size(11.5).color(
+            if prefix.is_empty() {
+                col().MUTED
+            } else {
+                col().TEXT
+            },
+        ));
+    });
+}
+
+/// Small single-number badge, e.g. "12".
+pub fn badge(ui: &mut Ui, n: usize) {
+    Frame::none()
+        .fill(col().INSET)
+        .rounding(Rounding::same(12.0))
+        .inner_margin(Margin::symmetric(8.0, 3.0))
+        .show(ui, |ui| {
+            ui.label(RichText::new(format!("{}", n)).size(11.0).strong().color(col().MUTED));
+        });
+}
+
+/// Small numeric badge, e.g. "12 / 40".
+pub fn count_badge(ui: &mut Ui, current: usize, total: usize) {
+    let text = format!("{} / {}", current, total);
+    Frame::none()
+        .fill(col().INSET)
+        .rounding(Rounding::same(12.0))
+        .inner_margin(Margin::symmetric(8.0, 3.0))
+        .show(ui, |ui| {
+            ui.label(RichText::new(text).size(11.5).strong().color(col().MUTED));
+        });
+}
+
+/// Inline progress dot row — shows filled/empty circles up to a cap.
+pub fn step_dots(ui: &mut Ui, done: usize, total: usize) {
+    let cap = total.min(40);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 3.0;
+        for i in 0..cap {
+            let (dot, _) = ui.allocate_exact_size(Vec2::new(6.0, 6.0), Sense::hover());
+            let filled = i < done;
+            ui.painter().circle_filled(
+                dot.center(),
+                3.0,
+                if filled { col().ACCENT } else { col().PANEL_EDGE },
+            );
+        }
+        if total > cap {
+            ui.label(RichText::new(format!("+{}", total - cap)).size(10.0).color(col().FAINT));
+        }
+    });
 }
 
 /// Full-width selectable list row with fixed height.

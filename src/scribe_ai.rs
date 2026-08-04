@@ -126,7 +126,7 @@ impl AiConfig {
         }
     }
 
-    fn endpoint(&self) -> Result<(String, String, String), String> {
+    pub fn endpoint(&self) -> Result<(String, String, String), String> {
         match self.provider {
             AiProvider::Glm => {
                 if self.glm_key.trim().is_empty() {

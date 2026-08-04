@@ -807,15 +807,21 @@ impl ClickerApp {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs();
-            let log_file = format!("{}\\workflow_{}.log", element_folder, now);
+            let log_file = Path::new(&element_folder)
+                .join(format!("workflow_{now}.log"))
+                .to_string_lossy()
+                .into_owned();
+            let db_path = Path::new(&element_folder)
+                .join("mouse_recorder.db")
+                .to_string_lossy()
+                .into_owned();
 
             log_write(&log, &log_file, "=== Workflow started ===".to_string());
             log_write(
                 &log,
                 &log_file,
                 format!(
-                    "DB: {}\\mouse_recorder.db | threshold={:.2} | pure_vision={} | retries={} | on_fail={} | debug={}",
-                    element_folder,
+                    "DB: {db_path} | threshold={:.2} | pure_vision={} | retries={} | on_fail={} | debug={}",
                     global_threshold,
                     global_pure_vision,
                     global_retries,
@@ -824,7 +830,6 @@ impl ClickerApp {
                 ),
             );
 
-            let db_path = format!("{}\\mouse_recorder.db", element_folder);
             let db = ElementDatabase::new(db_path);
             // Shared across IfVision → Click: reuse coords + grow ROI from last hits.
             let vision = Arc::new(Mutex::new(VisionSession::default()));
@@ -941,6 +946,115 @@ impl ClickerApp {
                                 ),
                             );
                             pc = *else_jump;
+                        }
+                    }
+                    StepType::IfText {
+                        needle,
+                        match_exact,
+                        case_sensitive,
+                        retries,
+                        retry_ms,
+                        then_jump,
+                        else_jump,
+                    } => {
+                        let retries = retries.unwrap_or(global_retries);
+                        let retry_ms = retry_ms.unwrap_or(global_retry_ms);
+                        let opts = crate::ocr::OcrMatchOpts {
+                            mode: if *match_exact {
+                                crate::ocr::MatchMode::Exact
+                            } else {
+                                crate::ocr::MatchMode::Contains
+                            },
+                            case_sensitive: *case_sensitive,
+                        };
+                        let hit = probe_text(needle, &opts, retries, retry_ms, &log, &log_file, i);
+                        if let Some(found) = hit {
+                            log_write(
+                                &log,
+                                &log_file,
+                                format!(
+                                    "Step {}: IfText '{}' → TRUE @({},{}) '{}' (jump {})",
+                                    i + 1,
+                                    needle,
+                                    found.x,
+                                    found.y,
+                                    found.text,
+                                    then_jump + 1
+                                ),
+                            );
+                            pc = *then_jump;
+                        } else {
+                            log_write(
+                                &log,
+                                &log_file,
+                                format!(
+                                    "Step {}: IfText '{}' → FALSE (jump {})",
+                                    i + 1,
+                                    needle,
+                                    else_jump + 1
+                                ),
+                            );
+                            pc = *else_jump;
+                        }
+                    }
+                    StepType::ClickText {
+                        needle,
+                        match_exact,
+                        case_sensitive,
+                        retries,
+                        retry_ms,
+                        on_fail,
+                    } => {
+                        let retries = retries.unwrap_or(global_retries);
+                        let retry_ms = retry_ms.unwrap_or(global_retry_ms);
+                        let fail = on_fail.unwrap_or(global_on_fail);
+                        let opts = crate::ocr::OcrMatchOpts {
+                            mode: if *match_exact {
+                                crate::ocr::MatchMode::Exact
+                            } else {
+                                crate::ocr::MatchMode::Contains
+                            },
+                            case_sensitive: *case_sensitive,
+                        };
+                        let hit = probe_text(needle, &opts, retries, retry_ms, &log, &log_file, i);
+                        if let Some(found) = hit {
+                            let (cx, cy) = found.center();
+                            log_write(
+                                &log,
+                                &log_file,
+                                format!(
+                                    "Step {}: ClickText '{}' → click ({},{}) [{}]",
+                                    i + 1,
+                                    needle,
+                                    cx,
+                                    cy,
+                                    found.text
+                                ),
+                            );
+                            click_at(cx, cy);
+                            pc += 1;
+                        } else {
+                            log_write(
+                                &log,
+                                &log_file,
+                                format!(
+                                    "Step {}: ClickText '{}' → miss ({})",
+                                    i + 1,
+                                    needle,
+                                    fail.as_str()
+                                ),
+                            );
+                            match fail {
+                                workflow::ClickFailAction::Abort => {
+                                    *state.lock().unwrap() = AppState::Idle;
+                                    *loop_progress.lock().unwrap() = None;
+                                    *window_visible.lock().unwrap() = true;
+                                    break;
+                                }
+                                workflow::ClickFailAction::Skip => {
+                                    pc += 1;
+                                }
+                            }
                         }
                     }
                     StepType::LoopStart { times } => {
@@ -1519,11 +1633,8 @@ impl ClickerApp {
                             .color(col().MUTED),
                     );
                     if !logs.is_empty() {
-                        ui.label(
-                            egui::RichText::new(format!("· {}", logs.len()))
-                                .size(11.0)
-                                .color(col().FAINT),
-                        );
+                        ui.add_space(6.0);
+                        theme::badge(ui, logs.len());
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if theme::quiet_button(ui, crate::i18n::t("clicker.log.clear")).clicked() {
@@ -1547,12 +1658,9 @@ impl ClickerApp {
                                     "运行任务后，步骤结果会显示在这里",
                                 );
                             } else {
+                                ui.spacing_mut().item_spacing.y = 2.0;
                                 for msg in &logs {
-                                    ui.label(
-                                        egui::RichText::new(msg)
-                                            .size(11.5)
-                                            .color(col().TEXT),
-                                    );
+                                    theme::log_line(ui, msg);
                                 }
                             }
                         });
@@ -1619,42 +1727,83 @@ impl ClickerApp {
         theme::hairline(ui);
 
         if !self.points.is_empty() {
-            theme::field_label(ui, &format!("已加载 {} 个点", self.points.len()));
-            ui.add_space(4.0);
-
             let current = *self.current_index.lock().unwrap();
             let state = self.state.lock().unwrap().clone();
+
+            // Header row: label + count badge + step dots when running
+            ui.horizontal(|ui| {
+                theme::field_label(ui, "已加载");
+                ui.add_space(6.0);
+                theme::count_badge(ui, current.min(self.points.len()), self.points.len());
+                if state == AppState::Running {
+                    ui.add_space(10.0);
+                    theme::step_dots(ui, current, self.points.len());
+                }
+            });
+            ui.add_space(4.0);
 
             theme::inset_frame().show(ui, |ui| {
                 egui::ScrollArea::vertical()
                     .max_height(200.0)
                     .show(ui, |ui| {
+                        ui.spacing_mut().item_spacing.y = 1.0;
                         for (i, p) in self.points.iter().enumerate() {
-                            let prefix = if state == AppState::Running && i == current {
-                                "▶ "
-                            } else if state == AppState::Running && i < current {
-                                "✓ "
-                            } else {
-                                "  "
-                            };
+                            let is_current = state == AppState::Running && i == current;
+                            let is_done = state == AppState::Running && i < current;
                             let template_indicator = if p.template_path.is_some() {
                                 " · 模板"
                             } else {
                                 ""
                             };
-                            ui.label(
-                                egui::RichText::new(format!(
-                                    "{}#{:03}  ({}, {}){}  {}",
-                                    prefix, p.id, p.x, p.y, template_indicator, p.description
-                                ))
-                                .size(12.5)
-                                .color(
-                                    if state == AppState::Running && i == current {
-                                        col().ACCENT
-                                    } else {
-                                        col().TEXT
-                                    },
+                            let prefix = if is_current { "▶" } else if is_done { "✓" } else { "·" };
+
+                            let (fg, bg) = if is_current {
+                                (col().ACCENT, col().ACCENT_SOFT)
+                            } else if is_done {
+                                (col().FAINT, egui::Color32::TRANSPARENT)
+                            } else {
+                                (col().TEXT, egui::Color32::TRANSPARENT)
+                            };
+
+                            let row_h = 26.0;
+                            let w = ui.available_width();
+                            let (row_rect, _) = ui.allocate_exact_size(
+                                egui::vec2(w, row_h),
+                                egui::Sense::hover(),
+                            );
+                            if bg != egui::Color32::TRANSPARENT {
+                                ui.painter().rect_filled(row_rect, 4.0, bg);
+                            }
+                            // left accent bar for current
+                            if is_current {
+                                ui.painter().rect_filled(
+                                    egui::Rect::from_min_size(
+                                        row_rect.min,
+                                        egui::vec2(3.0, row_h),
+                                    ),
+                                    1.0,
+                                    col().ACCENT,
+                                );
+                            }
+
+                            let text = format!(
+                                "{} #{:03}  ({}, {}){}  {}",
+                                prefix, p.id, p.x, p.y, template_indicator, p.description
+                            );
+                            let galley = ui.fonts(|f| {
+                                f.layout_no_wrap(
+                                    text,
+                                    egui::FontId::new(12.0, egui::FontFamily::Proportional),
+                                    fg,
+                                )
+                            });
+                            ui.painter().galley(
+                                egui::pos2(
+                                    row_rect.left() + 10.0,
+                                    row_rect.center().y - galley.size().y * 0.5,
                                 ),
+                                galley,
+                                fg,
                             );
                         }
                     });
@@ -1849,54 +1998,37 @@ impl ClickerApp {
         theme::hairline(ui);
 
         if !self.workflow_steps.is_empty() {
-            theme::field_label(
-                ui,
-                &format!("工作流步骤 · {} 步", self.workflow_steps.len()),
-            );
-            ui.add_space(4.0);
-
             let current = *self.current_index.lock().unwrap();
             let state = self.state.lock().unwrap().clone();
+
+            ui.horizontal(|ui| {
+                theme::field_label(ui, "工作流步骤");
+                ui.add_space(6.0);
+                theme::count_badge(ui, current.min(self.workflow_steps.len()), self.workflow_steps.len());
+                if state == AppState::Running {
+                    ui.add_space(10.0);
+                    theme::step_dots(ui, current, self.workflow_steps.len());
+                }
+            });
+            ui.add_space(4.0);
 
             theme::inset_frame().show(ui, |ui| {
                 egui::ScrollArea::vertical()
                     .max_height(200.0)
                     .show(ui, |ui| {
+                        ui.spacing_mut().item_spacing.y = 1.0;
                         for (i, step) in self.workflow_steps.iter().enumerate() {
-                            let prefix = if state == AppState::Running && i == current {
-                                "▶ "
-                            } else if step.executed {
-                                "✓ "
-                            } else {
-                                "  "
-                            };
+                            let is_current = state == AppState::Running && i == current;
+                            let is_done = step.executed;
 
                             let step_desc = match &step.step_type {
-                                StepType::Click {
-                                    element_name,
-                                    or_elements,
-                                    threshold,
-                                    pure_vision,
-                                    retries,
-                                    retry_ms: _,
-                                    on_fail,
-                                } => {
+                                StepType::Click { element_name, or_elements, threshold, pure_vision, retries, retry_ms: _, on_fail } => {
                                     let names = workflow::merge_or_names(element_name, or_elements);
                                     let mut desc = format!("点击: {}", names.join(" 或 "));
-                                    if let Some(t) = threshold {
-                                        desc.push_str(&format!(" thr={:.2}", t));
-                                    }
-                                    if pure_vision == &Some(true) {
-                                        desc.push_str(" [纯视觉]");
-                                    }
-                                    if let Some(r) = retries {
-                                        if *r > 0 {
-                                            desc.push_str(&format!(" 重试={}", r));
-                                        }
-                                    }
-                                    if on_fail == &Some(ClickFailAction::Abort) {
-                                        desc.push_str(" [中止]");
-                                    }
+                                    if let Some(t) = threshold { desc.push_str(&format!(" thr={:.2}", t)); }
+                                    if pure_vision == &Some(true) { desc.push_str(" [纯视觉]"); }
+                                    if let Some(r) = retries { if *r > 0 { desc.push_str(&format!(" 重试={}", r)); } }
+                                    if on_fail == &Some(ClickFailAction::Abort) { desc.push_str(" [中止]"); }
                                     desc
                                 }
                                 StepType::Pause { message, .. } => format!("暂停: {}", message),
@@ -1904,49 +2036,66 @@ impl ClickerApp {
                                 StepType::Wait { seconds } => format!("等待: {}s", seconds),
                                 StepType::TypeText { text, .. } => {
                                     let p: String = text.chars().take(24).collect();
-                                    format!(
-                                        "输入: {}{}",
-                                        p,
-                                        if text.chars().count() > 24 { "…" } else { "" }
-                                    )
+                                    format!("输入: {}{}", p, if text.chars().count() > 24 { "…" } else { "" })
                                 }
                                 StepType::LoopStart { times } => format!("循环 ×{}", times),
-                                StepType::LoopWhileStart {
-                                    element_name,
-                                    or_elements,
-                                    max_times,
-                                    ..
-                                } => {
+                                StepType::LoopWhileStart { element_name, or_elements, max_times, .. } => {
                                     let names = workflow::merge_or_names(element_name, or_elements);
                                     format!("条件循环 '{}' ≤{}", names.join(" 或 "), max_times)
                                 }
                                 StepType::LoopEnd => "循环结束".into(),
-                                StepType::IfVision {
-                                    element_name,
-                                    or_elements,
-                                    then_jump,
-                                    else_jump,
-                                    ..
-                                } => {
+                                StepType::IfVision { element_name, or_elements, then_jump, else_jump, .. } => {
                                     let names = workflow::merge_or_names(element_name, or_elements);
-                                    format!(
-                                        "视觉条件 '{}' →{}|{}",
-                                        names.join(" 或 "),
-                                        then_jump + 1,
-                                        else_jump + 1
-                                    )
+                                    format!("视觉条件 '{}' →{}|{}", names.join(" 或 "), then_jump + 1, else_jump + 1)
                                 }
+                                StepType::IfText { needle, then_jump, else_jump, .. } => {
+                                    format!("文字条件 '{}' →{}|{}", needle, then_jump + 1, else_jump + 1)
+                                }
+                                StepType::ClickText { needle, .. } => format!("点击文字 '{}'", needle),
                                 StepType::Goto { jump } => format!("跳转 →{}", jump + 1),
                             };
 
-                            ui.label(
-                                egui::RichText::new(format!("{}{}. {}", prefix, i + 1, step_desc))
-                                    .size(12.5)
-                                    .color(if state == AppState::Running && i == current {
-                                        col().ACCENT
-                                    } else {
-                                        col().TEXT
-                                    }),
+                            let prefix = if is_current { "▶" } else if is_done { "✓" } else { "·" };
+                            let (fg, bg) = if is_current {
+                                (col().ACCENT, col().ACCENT_SOFT)
+                            } else if is_done {
+                                (col().FAINT, egui::Color32::TRANSPARENT)
+                            } else {
+                                (col().TEXT, egui::Color32::TRANSPARENT)
+                            };
+
+                            let row_h = 26.0;
+                            let w = ui.available_width();
+                            let (row_rect, _) = ui.allocate_exact_size(
+                                egui::vec2(w, row_h),
+                                egui::Sense::hover(),
+                            );
+                            if bg != egui::Color32::TRANSPARENT {
+                                ui.painter().rect_filled(row_rect, 4.0, bg);
+                            }
+                            if is_current {
+                                ui.painter().rect_filled(
+                                    egui::Rect::from_min_size(row_rect.min, egui::vec2(3.0, row_h)),
+                                    1.0,
+                                    col().ACCENT,
+                                );
+                            }
+
+                            let text = format!("{} {}. {}", prefix, i + 1, step_desc);
+                            let galley = ui.fonts(|f| {
+                                f.layout_no_wrap(
+                                    text,
+                                    egui::FontId::new(12.0, egui::FontFamily::Proportional),
+                                    fg,
+                                )
+                            });
+                            ui.painter().galley(
+                                egui::pos2(
+                                    row_rect.left() + 10.0,
+                                    row_rect.center().y - galley.size().y * 0.5,
+                                ),
+                                galley,
+                                fg,
                             );
                         }
                     });
@@ -2300,7 +2449,10 @@ fn locate_element(
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or(&state.screenshot_path);
-            let template_path = format!("{}\\{}", element_folder, img_filename);
+            let template_path = Path::new(element_folder)
+                .join(img_filename)
+                .to_string_lossy()
+                .into_owned();
             if !Path::new(&template_path).exists() {
                 if !quiet {
                     log_write(
@@ -2770,6 +2922,57 @@ fn execute_click_with_retries(
     }
 }
 
+/// OCR probe with retries. Returns first hit or None after all tries.
+fn probe_text(
+    needle: &str,
+    opts: &crate::ocr::OcrMatchOpts,
+    retries: u32,
+    retry_ms: u64,
+    log: &Arc<Mutex<Vec<String>>>,
+    log_file: &str,
+    step_index: usize,
+) -> Option<crate::ocr::OcrHit> {
+    let total_tries = retries.saturating_add(1);
+    for attempt in 0..total_tries {
+        if attempt > 0 {
+            log_write(
+                log,
+                log_file,
+                format!(
+                    "Step {}: OCR retry {}/{} after {}ms",
+                    step_index + 1,
+                    attempt,
+                    retries,
+                    retry_ms
+                ),
+            );
+            thread::sleep(Duration::from_millis(retry_ms.max(1)));
+        }
+        match crate::ocr::find_text_on_screen(needle, opts) {
+            Ok(Some(hit)) => return Some(hit),
+            Ok(None) => {
+                log_write(
+                    log,
+                    log_file,
+                    format!(
+                        "Step {}: OCR no match for '{}'",
+                        step_index + 1,
+                        needle
+                    ),
+                );
+            }
+            Err(e) => {
+                log_write(
+                    log,
+                    log_file,
+                    format!("Step {}: OCR error: {}", step_index + 1, e),
+                );
+            }
+        }
+    }
+    None
+}
+
 /// Vision-only probe (no click). Tries OR candidates each attempt; retries on total miss.
 fn probe_any_element(
     names: &[String],
@@ -2921,6 +3124,8 @@ fn step_type_hud_label(st: &StepType) -> String {
             let names = workflow::merge_or_names(element_name, or_elements);
             format!("视觉条件  {}", names.join(" ∨ "))
         }
+        StepType::IfText { needle, .. } => format!("文字条件  {}", needle),
+        StepType::ClickText { needle, .. } => format!("点击文字  {}", needle),
         StepType::Goto { jump } => format!("跳转  →{}", jump + 1),
     }
 }
@@ -3424,5 +3629,29 @@ fn send_vk_chord(mods: &[u16], key: u16) {
     }
     unsafe {
         let _ = SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
+    }
+}
+
+#[cfg(test)]
+mod path_join_tests {
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn workflow_paths_use_join_not_backslash_literal() {
+        let folder = PathBuf::from("/Users/me/Library/Application Support/Mouse Suite");
+        let db = folder.join("mouse_recorder.db");
+        let template = folder.join("elem.png");
+        let log = folder.join("workflow_1.log");
+        // POSIX: join must produce a separate final component, not embed '\'.
+        assert_eq!(db.file_name().and_then(|s| s.to_str()), Some("mouse_recorder.db"));
+        assert_eq!(template.file_name().and_then(|s| s.to_str()), Some("elem.png"));
+        assert_eq!(log.file_name().and_then(|s| s.to_str()), Some("workflow_1.log"));
+        let bad = format!("{}\\mouse_recorder.db", folder.display());
+        assert!(
+            Path::new(&bad).file_name().and_then(|s| s.to_str())
+                != Some("mouse_recorder.db")
+                || cfg!(windows),
+            "backslash concat embeds separator into filename on non-Windows"
+        );
     }
 }

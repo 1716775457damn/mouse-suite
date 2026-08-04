@@ -55,10 +55,25 @@
 在聚焦假设成立时：`Click(输入框)` → `TypeText("hello{Enter}")`。  
 若用户只说输入、未提点击，也可直接 `TypeText`。
 
+## Pattern G — 文字识别条件 / 点文字
+
+适用：「屏幕上出现『确定』就点它」「看到错误提示就走失败分支」
+
+- `IfText`：OCR 找到 `needle` → true，否则 false（两出边必填）
+- `ClickText`：OCR 找到后点击文字包围盒中心
+
+拓扑示例：`Start → IfText("确定") —true→ ClickText("确定") → End`，false 可接 Wait 再绕回 IfText。
+
+```json
+{"version":1,"title":"文字确定","nodes":[{"id":1,"kind":"Start","pos":[60,180]},{"id":2,"kind":"IfText","pos":[260,180],"needle":"确定","match_exact":false,"case_sensitive":false,"retries":2,"retry_ms":400},{"id":3,"kind":"ClickText","pos":[500,120],"needle":"确定","retries":1,"retry_ms":300,"on_fail":"skip"},{"id":4,"kind":"Wait","pos":[500,260],"seconds":1},{"id":5,"kind":"End","pos":[720,180]}],"edges":[{"from":1,"to":2,"branch":"main"},{"from":2,"to":3,"branch":"true"},{"from":2,"to":4,"branch":"false"},{"from":3,"to":5,"branch":"main"},{"from":4,"to":2,"branch":"main"}],"next_id":6}
+```
+
 ## 意图判别口诀
 
-1. 提到「成功 / 匹配到 / 看到才点 / 才算一次」→ **Pattern B**
+1. 提到「成功 / 匹配到 / 看到才点 / 才算一次」且是**图片模板** → **Pattern B**
 2. 只说「循环 N 次点击」→ **Pattern C**
 3. 说「一直 / 直到消失 / 有就继续」→ **Pattern E**
-4. 「如果…否则…」→ **Pattern D**
-5. 普通顺序操作 → **Pattern A**
+4. 「如果…否则…」用模板图 → **Pattern D**
+5. 「出现某段文字 / OCR / 点这个字」→ **Pattern G**
+6. 普通顺序操作 → **Pattern A**
+7. 输入文字 → **Pattern F**

@@ -1096,21 +1096,47 @@ impl ScribeApp {
 
     fn ui_editor(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         if self.recording {
+            let n = self.buffer.lock().map(|b| b.len()).unwrap_or(0);
             ui.vertical_centered(|ui| {
-                ui.add_space(48.0);
-                ui.label(
-                    RichText::new(crate::i18n::t("scribe.recording"))
-                        .size(22.0)
-                        .strong()
-                        .color(theme::col().DANGER),
-                );
-                ui.add_space(6.0);
-                let n = self.buffer.lock().map(|b| b.len()).unwrap_or(0);
-                ui.label(
-                    RichText::new(format!("已捕获 {n} 步 · Ctrl+Alt+F10 停止"))
-                        .size(13.0)
-                        .color(theme::col().MUTED),
-                );
+                ui.add_space(40.0);
+                // Recording state box
+                egui::Frame::none()
+                    .fill(theme::col().INSET)
+                    .stroke(egui::Stroke::new(1.5, theme::col().DANGER))
+                    .rounding(egui::Rounding::same(12.0))
+                    .inner_margin(egui::Margin::symmetric(28.0, 22.0))
+                    .show(ui, |ui| {
+                        ui.set_max_width(380.0);
+                        ui.vertical_centered(|ui| {
+                            // Red dot
+                            let (dot, _) = ui.allocate_exact_size(
+                                egui::vec2(12.0, 12.0),
+                                egui::Sense::hover(),
+                            );
+                            ui.painter().circle_filled(dot.center(), 6.0, theme::col().DANGER);
+
+                            ui.add_space(10.0);
+                            ui.label(
+                                RichText::new(crate::i18n::t("scribe.recording"))
+                                    .size(20.0)
+                                    .strong()
+                                    .color(theme::col().DANGER),
+                            );
+                            ui.add_space(6.0);
+                            ui.label(
+                                RichText::new(format!("已捕获 {} 步", n))
+                                    .size(28.0)
+                                    .strong()
+                                    .color(theme::col().TEXT),
+                            );
+                            ui.add_space(8.0);
+                            ui.label(
+                                RichText::new("点击任意处录制 · Ctrl+Alt+F10 或 F8 停止")
+                                    .size(12.0)
+                                    .color(theme::col().MUTED),
+                            );
+                        });
+                    });
             });
             return;
         }
@@ -1164,11 +1190,17 @@ impl ScribeApp {
                     self.selected_step = n_steps.saturating_sub(1);
                 }
 
-                // Step picker (always visible)
-                theme::field_label(ui, crate::i18n::t("scribe.field.step"));
+                // Step picker — numbered pill chips
+                ui.horizontal(|ui| {
+                    theme::field_label(ui, crate::i18n::t("scribe.field.step"));
+                    ui.add_space(6.0);
+                    theme::count_badge(ui, self.selected_step + 1, n_steps);
+                });
                 ui.add_space(4.0);
                 ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
                     for i in 0..n_steps {
+                        let selected = self.selected_step == i;
                         let label = self
                             .session
                             .as_ref()
@@ -1177,15 +1209,11 @@ impl ScribeApp {
                                 if st.title.is_empty() {
                                     format!("{}", i + 1)
                                 } else {
-                                    format!("{}. {}", i + 1, st.title)
+                                    format!("{}. {}", i + 1, &st.title.chars().take(12).collect::<String>())
                                 }
                             })
                             .unwrap_or_else(|| format!("{}", i + 1));
-                        let selected = self.selected_step == i;
-                        if ui
-                            .selectable_label(selected, RichText::new(label).strong())
-                            .clicked()
-                        {
+                        if theme::tab_chip(ui, selected, &label) {
                             self.selected_step = i;
                         }
                     }

@@ -35,6 +35,34 @@ pub fn last_cursor_pos() -> (i32, i32) {
     )
 }
 
+/// Seed / sync the hook cursor cache (used before first MouseMove arrives).
+pub fn seed_cursor(x: i32, y: i32) {
+    LAST_X.store(x, Ordering::Relaxed);
+    LAST_Y.store(y, Ordering::Relaxed);
+}
+
+fn seed_cursor_from_os() {
+    #[cfg(windows)]
+    {
+        use windows::Win32::Foundation::POINT;
+        use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
+        let mut pt = POINT { x: 0, y: 0 };
+        if unsafe { GetCursorPos(&mut pt) }.is_ok() {
+            seed_cursor(pt.x, pt.y);
+            return;
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        use enigo::{Enigo, Mouse, Settings};
+        if let Ok(enigo) = Enigo::new(&Settings::default()) {
+            if let Ok((x, y)) = enigo.location() {
+                seed_cursor(x, y);
+            }
+        }
+    }
+}
+
 fn alt_held() -> bool {
     if ALT_HELD.load(Ordering::Relaxed) {
         return true;
@@ -83,13 +111,16 @@ impl MouseHook {
         let flow_flag = Arc::new(AtomicBool::new(false));
         let scribe_ignore: IgnoreRect = Arc::new(Mutex::new(None));
 
+        seed_cursor_from_os();
+
         let rf = recorder_flag.clone();
         let sf = scribe_flag.clone();
         let ff = flow_flag.clone();
         let ignore = scribe_ignore.clone();
 
         thread::spawn(move || {
-            let last_pos = Arc::new(Mutex::new((0.0_f64, 0.0_f64)));
+            let (sx, sy) = last_cursor_pos();
+            let last_pos = Arc::new(Mutex::new((sx as f64, sy as f64)));
 
             // Grab callback can swallow events (return None).
             let last_for_grab = Arc::clone(&last_pos);

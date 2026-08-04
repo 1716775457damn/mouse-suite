@@ -1,6 +1,6 @@
 [package]
 name = "mouse-suite"
-version = "0.2.8"
+version = "0.2.9"
 edition = "2021"
 description = "Recorder + clicker + visual workflow editor with agent bridge"
 license = "MIT"
@@ -31,7 +31,15 @@ windows = { version = "0.52", features = [
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",
     "Win32_Graphics_Gdi",
-    "Win32_Foundation"
+    "Win32_Foundation",
+    "Win32_System_WinRT",
+    "Foundation",
+    "Foundation_Collections",
+    "Globalization",
+    "Graphics_Imaging",
+    "Media_Ocr",
+    "Storage",
+    "Storage_Streams",
 ] }
 
 [target.'cfg(windows)'.build-dependencies]

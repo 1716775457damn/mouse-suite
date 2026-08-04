@@ -135,7 +135,7 @@ fn to_mermaid(doc: &FlowDocument) -> String {
     for n in &doc.nodes {
         let label = mermaid_label(n);
         let shape = match n.kind {
-            NodeKind::IfVision => format!("  n{}{{{}}}", n.id, label),
+            NodeKind::IfVision | NodeKind::IfText => format!("  n{}{{{}}}", n.id, label),
             NodeKind::Start | NodeKind::End => format!("  n{}([{}])", n.id, label),
             _ => format!("  n{}[\"{}\"]", n.id, label),
         };
@@ -160,7 +160,9 @@ fn mermaid_label(n: &FlowNode) -> String {
         NodeKind::LoopStart => format!("循环 x{}", n.seconds.max(1)),
         NodeKind::LoopEnd => "循环结束".into(),
         NodeKind::IfVision => format!("{}?", n.element_name),
+        NodeKind::IfText => format!("文字? {}", n.needle),
         NodeKind::Click => format!("点击 {}", n.element_name),
+        NodeKind::ClickText => format!("点文字 {}", n.needle),
         NodeKind::TypeText => {
             let t: String = n.type_text.chars().take(12).collect();
             format!("输入 {t}")
@@ -341,6 +343,10 @@ fn kind_from_label(label: &str) -> NodeKind {
         NodeKind::LoopStart
     } else if c.contains("条件循环") {
         NodeKind::LoopWhile
+    } else if c.contains("文字?") || c.contains("文字条件") || l.contains("iftext") {
+        NodeKind::IfText
+    } else if c.contains("点文字") || l.contains("clicktext") {
+        NodeKind::ClickText
     } else if c.contains('?') || c.contains("视觉") {
         NodeKind::IfVision
     } else if c.contains("点击") || l.contains("click") {
@@ -384,6 +390,18 @@ fn apply_label_props(n: &mut FlowNode, label: &str) {
                 .to_string();
             if !name.is_empty() {
                 n.element_name = name;
+            }
+        }
+        NodeKind::IfText | NodeKind::ClickText => {
+            let name = label
+                .replace('?', "")
+                .replace("文字条件", "")
+                .replace("文字?", "")
+                .replace("点文字", "")
+                .trim()
+                .to_string();
+            if !name.is_empty() {
+                n.needle = name;
             }
         }
         NodeKind::TypeText => {

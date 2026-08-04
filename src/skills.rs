@@ -107,7 +107,10 @@ const BASE_HEADER: &str = r#"你是 Mouse Suite 流程图生成器。根据用�
       "message": "",
       "instruction": "",
       "type_text": "",
-      "type_interval_ms": 30
+      "type_interval_ms": 30,
+      "needle": "",
+      "match_exact": false,
+      "case_sensitive": false
     }
   ],
   "edges": [ { "from": 1, "to": 2, "branch": "main" } ],
@@ -115,7 +118,7 @@ const BASE_HEADER: &str = r#"你是 Mouse Suite 流程图生成器。根据用�
 }
 
 kind 只能是:
-"Start"|"End"|"Click"|"Wait"|"TypeText"|"Pause"|"Manual"|"LoopStart"|"LoopEnd"|"IfVision"|"LoopWhile"
+"Start"|"End"|"Click"|"ClickText"|"Wait"|"TypeText"|"Pause"|"Manual"|"LoopStart"|"LoopEnd"|"IfVision"|"IfText"|"LoopWhile"
 "#;
 
 /// Full system prompt for flow AI (header + built-in skills).
@@ -136,7 +139,7 @@ pub fn flow_ai_system_prompt() -> String {
         out.push('\n');
     }
     out.push_str(
-        "\n最终提醒：只输出 JSON 对象本身；IfVision 必须有 true/false 两边；Wait.seconds 是秒；LoopStart.seconds 是次数。\n",
+        "\n最终提醒：只输出 JSON 对象本身；IfVision/IfText 必须有 true/false 两边；Wait.seconds 是秒；LoopStart.seconds 是次数；IfText/ClickText 用 needle 字段写目标文字。\n",
     );
     out
 }

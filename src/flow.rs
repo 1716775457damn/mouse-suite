@@ -29,6 +29,10 @@ pub enum NodeKind {
     LoopEnd,
     /// Vision-only condition with True/False out ports.
     IfVision,
+    /// OCR text condition with True/False out ports.
+    IfText,
+    /// OCR: click the matched text bbox center.
+    ClickText,
     /// Loop while template matches; pairs with LoopEnd.
     LoopWhile,
     /// Keyboard text / special-key input into the focused control.
@@ -40,12 +44,12 @@ impl NodeKind {
         match self {
             NodeKind::Start => col().NODE_START,
             NodeKind::End => col().NODE_END,
-            NodeKind::Click => col().NODE_CLICK,
+            NodeKind::Click | NodeKind::ClickText => col().NODE_CLICK,
             NodeKind::Wait => col().NODE_WAIT,
             NodeKind::Pause => col().NODE_PAUSE,
             NodeKind::Manual => col().NODE_MANUAL,
             NodeKind::LoopStart | NodeKind::LoopEnd | NodeKind::LoopWhile => col().NODE_LOOP,
-            NodeKind::IfVision => col().NODE_IF,
+            NodeKind::IfVision | NodeKind::IfText => col().NODE_IF,
             NodeKind::TypeText => col().NODE_TYPE,
         }
     }
@@ -61,10 +65,16 @@ impl NodeKind {
             NodeKind::LoopStart => crate::i18n::t("flow.node.loop_start"),
             NodeKind::LoopEnd => crate::i18n::t("flow.node.loop_end"),
             NodeKind::IfVision => crate::i18n::t("flow.node.if_vision"),
+            NodeKind::IfText => crate::i18n::t("flow.node.if_text"),
+            NodeKind::ClickText => crate::i18n::t("flow.node.click_text"),
             NodeKind::LoopWhile => crate::i18n::t("flow.node.loop_while"),
             NodeKind::TypeText => crate::i18n::t("flow.node.type_text"),
         }
     }
+}
+
+fn is_if_branch(kind: NodeKind) -> bool {
+    matches!(kind, NodeKind::IfVision | NodeKind::IfText)
 }
 
 fn default_type_interval_ms() -> u64 {
@@ -150,6 +160,14 @@ pub(crate) struct FlowNode {
     pub type_text: String,
     #[serde(default = "default_type_interval_ms")]
     pub type_interval_ms: u64,
+    /// OCR target string (IfText / ClickText).
+    #[serde(default)]
+    pub needle: String,
+    /// Exact match instead of substring contains.
+    #[serde(default)]
+    pub match_exact: bool,
+    #[serde(default)]
+    pub case_sensitive: bool,
 }
 
 impl FlowNode {
@@ -176,6 +194,13 @@ impl FlowNode {
                 String::new()
             },
             type_interval_ms: 30,
+            needle: if kind == NodeKind::IfText || kind == NodeKind::ClickText {
+                "确定".into()
+            } else {
+                String::new()
+            },
+            match_exact: false,
+            case_sensitive: false,
         }
     }
 
@@ -208,8 +233,8 @@ impl FlowNode {
 
     fn out_port_for(&self, branch: EdgeBranch) -> Pos2 {
         match (self.kind, branch) {
-            (NodeKind::IfVision, EdgeBranch::True) => self.out_port_true(),
-            (NodeKind::IfVision, EdgeBranch::False) => self.out_port_false(),
+            (NodeKind::IfVision | NodeKind::IfText, EdgeBranch::True) => self.out_port_true(),
+            (NodeKind::IfVision | NodeKind::IfText, EdgeBranch::False) => self.out_port_false(),
             _ => self.out_port(),
         }
     }
@@ -264,6 +289,21 @@ impl FlowNode {
                 s
             }
             NodeKind::IfVision => format!("{} ?", self.or_subtitle()),
+            NodeKind::IfText | NodeKind::ClickText => {
+                let chars: Vec<char> = self.needle.chars().collect();
+                let label = if chars.is_empty() {
+                    "（空）".into()
+                } else if chars.len() > 12 {
+                    format!("{}…", chars.into_iter().take(12).collect::<String>())
+                } else {
+                    self.needle.clone()
+                };
+                if self.kind == NodeKind::IfText {
+                    format!("{label} ?")
+                } else {
+                    label
+                }
+            }
             NodeKind::Wait => format!("{} 秒", self.seconds),
             NodeKind::TypeText => {
                 let chars: Vec<char> = self.type_text.chars().collect();
@@ -293,12 +333,23 @@ impl FlowNode {
 
     fn to_step(&self) -> Option<StepType> {
         match self.kind {
-            NodeKind::Start | NodeKind::End | NodeKind::IfVision => None,
+            NodeKind::Start | NodeKind::End | NodeKind::IfVision | NodeKind::IfText => None,
             NodeKind::Click => Some(StepType::Click {
                 element_name: self.element_name.clone(),
                 or_elements: self.effective_or_elements(),
                 threshold: Some(self.threshold.clamp(0.1, 1.0)),
                 pure_vision: Some(self.pure_vision),
+                retries: Some(self.retries),
+                retry_ms: Some(self.retry_ms.max(0)),
+                on_fail: Some(match self.on_fail {
+                    FailAction::Skip => workflow::ClickFailAction::Skip,
+                    FailAction::Abort => workflow::ClickFailAction::Abort,
+                }),
+            }),
+            NodeKind::ClickText => Some(StepType::ClickText {
+                needle: self.needle.clone(),
+                match_exact: self.match_exact,
+                case_sensitive: self.case_sensitive,
                 retries: Some(self.retries),
                 retry_ms: Some(self.retry_ms.max(0)),
                 on_fail: Some(match self.on_fail {
@@ -1215,6 +1266,54 @@ impl FlowEditor {
                     }
                     n
                 }
+                StepType::IfText {
+                    needle,
+                    match_exact,
+                    case_sensitive,
+                    retries,
+                    retry_ms,
+                    ..
+                } => {
+                    let mut n =
+                        FlowNode::new(self.alloc_id(), NodeKind::IfText, Pos2::new(x, 180.0));
+                    n.needle = needle.clone();
+                    n.match_exact = *match_exact;
+                    n.case_sensitive = *case_sensitive;
+                    if let Some(r) = retries {
+                        n.retries = *r;
+                    }
+                    if let Some(ms) = retry_ms {
+                        n.retry_ms = *ms;
+                    }
+                    n
+                }
+                StepType::ClickText {
+                    needle,
+                    match_exact,
+                    case_sensitive,
+                    retries,
+                    retry_ms,
+                    on_fail,
+                } => {
+                    let mut n =
+                        FlowNode::new(self.alloc_id(), NodeKind::ClickText, Pos2::new(x, 180.0));
+                    n.needle = needle.clone();
+                    n.match_exact = *match_exact;
+                    n.case_sensitive = *case_sensitive;
+                    if let Some(r) = retries {
+                        n.retries = *r;
+                    }
+                    if let Some(ms) = retry_ms {
+                        n.retry_ms = *ms;
+                    }
+                    if let Some(f) = on_fail {
+                        n.on_fail = match f {
+                            workflow::ClickFailAction::Skip => FailAction::Skip,
+                            workflow::ClickFailAction::Abort => FailAction::Abort,
+                        };
+                    }
+                    n
+                }
                 StepType::Goto { .. } => {
                     // Compile artifact — skip in linear rebuild.
                     continue;
@@ -1480,7 +1579,7 @@ impl FlowEditor {
         let Some(b) = self.node(to) else { return };
         // Allow IfVision「否」自环：未达阈值则重试，不消耗循环次数
         let false_self_retry =
-            from == to && a.kind == NodeKind::IfVision && requested == EdgeBranch::False;
+            from == to && is_if_branch(a.kind) && requested == EdgeBranch::False;
         if from == to && !false_self_retry {
             return;
         }
@@ -1489,7 +1588,7 @@ impl FlowEditor {
             return;
         }
         let from_kind = a.kind;
-        let branch = if from_kind == NodeKind::IfVision {
+        let branch = if is_if_branch(from_kind) {
             match requested {
                 EdgeBranch::True | EdgeBranch::False => requested,
                 EdgeBranch::Main => {
@@ -1508,7 +1607,7 @@ impl FlowEditor {
         }
 
         self.push_undo();
-        if from_kind == NodeKind::IfVision {
+        if is_if_branch(from_kind) {
             self.edges
                 .retain(|e| !(e.from == from && e.branch == branch));
         } else {
@@ -1563,7 +1662,7 @@ impl FlowEditor {
             }
             if matches!(
                 n.kind,
-                NodeKind::End | NodeKind::LoopEnd | NodeKind::IfVision
+                NodeKind::End | NodeKind::LoopEnd | NodeKind::IfVision | NodeKind::IfText
             ) && n.kind != kind
             {
                 // Stop at control boundaries (unless looking for that kind).
@@ -1571,7 +1670,7 @@ impl FlowEditor {
                     break;
                 }
             }
-            cur = if n.kind == NodeKind::IfVision {
+            cur = if is_if_branch(n.kind) {
                 self.edge_target(id, EdgeBranch::True)
             } else {
                 self.edge_target(id, EdgeBranch::Main)
@@ -1602,7 +1701,7 @@ impl FlowEditor {
             ) {
                 return false;
             }
-            if n.kind == NodeKind::IfVision {
+            if is_if_branch(n.kind) {
                 return false;
             }
             cur = self
@@ -1624,7 +1723,7 @@ impl FlowEditor {
             if from_b.contains(&c) {
                 return Some(c);
             }
-            cur = if self.node(c).map(|n| n.kind) == Some(NodeKind::IfVision) {
+            cur = if self.node(c).map(|n| is_if_branch(n.kind)).unwrap_or(false) {
                 self.edge_target(c, EdgeBranch::True)
                     .or_else(|| self.edge_target(c, EdgeBranch::False))
             } else {
@@ -1648,30 +1747,41 @@ impl FlowEditor {
 
         let reach = self.descendants(start.id);
         for n in &self.nodes {
-            if n.kind == NodeKind::IfVision {
+            if is_if_branch(n.kind) {
                 if self.edge_target(n.id, EdgeBranch::True).is_none() {
                     return Err(format!(
-                        "「视觉条件」#{} 缺少 True（是）出边，请从上方端口连出",
+                        "「{}」#{} 缺少 True（是）出边，请从上方端口连出",
+                        n.kind.title(),
                         n.id
                     ));
                 }
                 if self.edge_target(n.id, EdgeBranch::False).is_none() {
                     return Err(format!(
-                        "「视觉条件」#{} 缺少 False（否）出边，请从下方端口连出",
+                        "「{}」#{} 缺少 False（否）出边，请从下方端口连出",
+                        n.kind.title(),
                         n.id
                     ));
                 }
+                if n.kind == NodeKind::IfText && n.needle.trim().is_empty() {
+                    return Err(format!("「文字条件」#{} 的目标文字为空", n.id));
+                }
+            }
+            if n.kind == NodeKind::ClickText && n.needle.trim().is_empty() && reach.contains(&n.id)
+            {
+                return Err(format!("「点击文字」#{} 的目标文字为空", n.id));
             }
             if !reach.contains(&n.id) && n.kind != NodeKind::Start {
                 match n.kind {
                     NodeKind::End
                     | NodeKind::Click
+                    | NodeKind::ClickText
                     | NodeKind::Wait
                     | NodeKind::Pause
                     | NodeKind::Manual
                     | NodeKind::LoopStart
                     | NodeKind::LoopEnd
                     | NodeKind::IfVision
+                    | NodeKind::IfText
                     | NodeKind::LoopWhile
                     | NodeKind::TypeText => {
                         return Err(format!(
@@ -1721,13 +1831,13 @@ impl FlowEditor {
             _ => {}
         }
 
-        let result = if node.kind == NodeKind::IfVision {
+        let result = if is_if_branch(node.kind) {
             let t = self
                 .edge_target(cur, EdgeBranch::True)
-                .ok_or_else(|| format!("「视觉条件」#{} 缺少 True 出边", cur))?;
+                .ok_or_else(|| format!("「{}」#{} 缺少 True 出边", node.kind.title(), cur))?;
             let f = self
                 .edge_target(cur, EdgeBranch::False)
-                .ok_or_else(|| format!("「视觉条件」#{} 缺少 False 出边", cur))?;
+                .ok_or_else(|| format!("「{}」#{} 缺少 False 出边", node.kind.title(), cur))?;
             self.check_loop_balance(t, depth, visiting)?;
             self.check_loop_balance(f, depth, visiting)
         } else if let Some(next) = self
@@ -1761,6 +1871,48 @@ impl FlowEditor {
         Ok(steps)
     }
 
+    fn branch_step_for_node(node: &FlowNode) -> StepType {
+        match node.kind {
+            NodeKind::IfText => StepType::IfText {
+                needle: node.needle.clone(),
+                match_exact: node.match_exact,
+                case_sensitive: node.case_sensitive,
+                retries: Some(node.retries),
+                retry_ms: Some(node.retry_ms),
+                then_jump: 0,
+                else_jump: 0,
+            },
+            _ => StepType::IfVision {
+                element_name: node.element_name.clone(),
+                or_elements: node.effective_or_elements(),
+                threshold: Some(node.threshold.clamp(0.1, 1.0)),
+                retries: Some(node.retries),
+                retry_ms: Some(node.retry_ms),
+                then_jump: 0,
+                else_jump: 0,
+            },
+        }
+    }
+
+    fn set_branch_jumps(st: &mut StepType, then_pc: usize, else_pc: usize) {
+        match st {
+            StepType::IfVision {
+                then_jump,
+                else_jump,
+                ..
+            }
+            | StepType::IfText {
+                then_jump,
+                else_jump,
+                ..
+            } => {
+                *then_jump = then_pc;
+                *else_jump = else_pc;
+            }
+            _ => {}
+        }
+    }
+
     fn compile_from(
         &self,
         start: u32,
@@ -1784,13 +1936,13 @@ impl FlowEditor {
                 return Ok(());
             }
 
-            if node.kind == NodeKind::IfVision {
+            if is_if_branch(node.kind) {
                 let then_to = self
                     .edge_target(cur, EdgeBranch::True)
-                    .ok_or_else(|| format!("「视觉条件」#{} 缺少 True 出边", cur))?;
+                    .ok_or_else(|| format!("「{}」#{} 缺少 True 出边", node.kind.title(), cur))?;
                 let else_to = self
                     .edge_target(cur, EdgeBranch::False)
-                    .ok_or_else(|| format!("「视觉条件」#{} 缺少 False 出边", cur))?;
+                    .ok_or_else(|| format!("「{}」#{} 缺少 False 出边", node.kind.title(), cur))?;
 
                 // 否 → 回到本条件：未达标重试，只有「是→点击→循环结束」才算一次
                 if self.else_retries_if(cur, else_to) {
@@ -1806,15 +1958,7 @@ impl FlowEditor {
 
                     let if_pc = steps.len();
                     steps.push(WorkflowStep::with_node(
-                        StepType::IfVision {
-                            element_name: node.element_name.clone(),
-                            or_elements: node.effective_or_elements(),
-                            threshold: Some(node.threshold.clamp(0.1, 1.0)),
-                            retries: Some(node.retries),
-                            retry_ms: Some(node.retry_ms),
-                            then_jump: 0,
-                            else_jump: 0,
-                        },
+                        Self::branch_step_for_node(node),
                         Some(node.id),
                     ));
 
@@ -1840,15 +1984,7 @@ impl FlowEditor {
                         else_pc
                     };
 
-                    if let StepType::IfVision {
-                        then_jump,
-                        else_jump: ej,
-                        ..
-                    } = &mut steps[if_pc].step_type
-                    {
-                        *then_jump = then_pc;
-                        *ej = else_jump;
-                    }
+                    Self::set_branch_jumps(&mut steps[if_pc].step_type, then_pc, else_jump);
 
                     match self
                         .edge_target(loop_end_id, EdgeBranch::Main)
@@ -1866,15 +2002,7 @@ impl FlowEditor {
 
                 let if_pc = steps.len();
                 steps.push(WorkflowStep::with_node(
-                    StepType::IfVision {
-                        element_name: node.element_name.clone(),
-                        or_elements: node.effective_or_elements(),
-                        threshold: Some(node.threshold.clamp(0.1, 1.0)),
-                        retries: Some(node.retries),
-                        retry_ms: Some(node.retry_ms),
-                        then_jump: 0,
-                        else_jump: 0,
-                    },
+                    Self::branch_step_for_node(node),
                     Some(node.id),
                 ));
 
@@ -1887,15 +2015,7 @@ impl FlowEditor {
                 self.compile_from(else_to, join, steps)?;
                 let after_else = steps.len();
 
-                if let StepType::IfVision {
-                    then_jump,
-                    else_jump,
-                    ..
-                } = &mut steps[if_pc].step_type
-                {
-                    *then_jump = then_pc;
-                    *else_jump = else_pc;
-                }
+                Self::set_branch_jumps(&mut steps[if_pc].step_type, then_pc, else_pc);
                 if let StepType::Goto { jump } = &mut steps[goto_pc].step_type {
                     *jump = after_else;
                 }
@@ -2105,6 +2225,54 @@ impl FlowEditor {
                         }
                         n
                     }
+                    StepType::IfText {
+                        needle,
+                        match_exact,
+                        case_sensitive,
+                        retries,
+                        retry_ms,
+                        ..
+                    } => {
+                        let mut n =
+                            FlowNode::new(self.alloc_id(), NodeKind::IfText, Pos2::new(80.0, y));
+                        n.needle = needle;
+                        n.match_exact = match_exact;
+                        n.case_sensitive = case_sensitive;
+                        if let Some(r) = retries {
+                            n.retries = r;
+                        }
+                        if let Some(ms) = retry_ms {
+                            n.retry_ms = ms;
+                        }
+                        n
+                    }
+                    StepType::ClickText {
+                        needle,
+                        match_exact,
+                        case_sensitive,
+                        retries,
+                        retry_ms,
+                        on_fail,
+                    } => {
+                        let mut n =
+                            FlowNode::new(self.alloc_id(), NodeKind::ClickText, Pos2::new(80.0, y));
+                        n.needle = needle;
+                        n.match_exact = match_exact;
+                        n.case_sensitive = case_sensitive;
+                        if let Some(r) = retries {
+                            n.retries = r;
+                        }
+                        if let Some(ms) = retry_ms {
+                            n.retry_ms = ms;
+                        }
+                        if let Some(f) = on_fail {
+                            n.on_fail = match f {
+                                workflow::ClickFailAction::Skip => FailAction::Skip,
+                                workflow::ClickFailAction::Abort => FailAction::Abort,
+                            };
+                        }
+                        n
+                    }
                     StepType::Goto { .. } => continue,
                     StepType::LoopEnd => {
                         FlowNode::new(self.alloc_id(), NodeKind::LoopEnd, Pos2::new(80.0, y))
@@ -2190,14 +2358,44 @@ impl FlowEditor {
                         .color(col().MUTED),
                 );
                 ui.add_space(8.0);
+                theme::field_label(ui, "动作");
+                ui.add_space(4.0);
                 for (kind, hint) in [
                     (NodeKind::Click, "模板元素点击"),
+                    (NodeKind::ClickText, "OCR 识别文字并点击其所在位置"),
                     (NodeKind::TypeText, "向当前焦点输入文字/按键"),
-                    (NodeKind::IfVision, "匹配成功走是，失败走否"),
                     (NodeKind::Wait, "延时等待"),
+                ] {
+                    if theme::fill_button(ui, kind.title(), kind.color())
+                        .on_hover_text(hint)
+                        .clicked()
+                    {
+                        self.add_node(kind);
+                    }
+                    ui.add_space(3.0);
+                }
+                ui.add_space(8.0);
+                theme::field_label(ui, "控制流");
+                ui.add_space(4.0);
+                for (kind, hint) in [
+                    (NodeKind::IfVision, "匹配成功走是，失败走否"),
+                    (NodeKind::IfText, "屏幕出现目标文字走是，否则走否"),
                     (NodeKind::LoopStart, "循环开始（固定次数）"),
                     (NodeKind::LoopWhile, "匹配到则继续循环（防死循环有上限）"),
                     (NodeKind::LoopEnd, "循环结束"),
+                ] {
+                    if theme::fill_button(ui, kind.title(), kind.color())
+                        .on_hover_text(hint)
+                        .clicked()
+                    {
+                        self.add_node(kind);
+                    }
+                    ui.add_space(3.0);
+                }
+                ui.add_space(8.0);
+                theme::field_label(ui, "其他");
+                ui.add_space(4.0);
+                for (kind, hint) in [
                     (NodeKind::Pause, "确认后继续"),
                     (NodeKind::Manual, "人工介入"),
                     (NodeKind::End, "流程结束"),
@@ -2219,15 +2417,15 @@ impl FlowEditor {
                     {
                         self.stop_click_recording(ctx);
                     }
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "{} · {}",
-                            crate::i18n::t("flow.record.capturing"),
-                            self.recorded_click_names.len()
-                        ))
-                        .size(11.0)
-                        .color(col().WARN),
-                    );
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new(crate::i18n::t("flow.record.capturing"))
+                                .size(11.0)
+                                .color(col().WARN),
+                        );
+                        ui.add_space(4.0);
+                        theme::badge(ui, self.recorded_click_names.len());
+                    });
                 } else if theme::primary_button(ui, crate::i18n::t("flow.btn.record_start"))
                     .on_hover_text(crate::i18n::t("flow.record.start_hint"))
                     .clicked()
@@ -2284,12 +2482,16 @@ impl FlowEditor {
                         ui.add_space(8.0);
                         theme::soft_separator(ui);
 
-                        ui.label(
-                            egui::RichText::new(crate::i18n::t("flow.inspector.title"))
-                                .size(13.0)
-                                .strong()
-                                .color(col().TEXT),
-                        );
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                egui::RichText::new(crate::i18n::t("flow.inspector.title"))
+                                    .size(13.0)
+                                    .strong()
+                                    .color(col().TEXT),
+                            );
+                            ui.add_space(4.0);
+                            theme::badge(ui, self.nodes.len());
+                        });
                         ui.add_space(8.0);
                         let mut request_shot: Option<String> = None;
                         let catalog = self.element_catalog.clone();
@@ -2627,6 +2829,98 @@ impl FlowEditor {
                                         n.retry_ms = retry_ms;
                                     }
                                 }
+                                Some(NodeKind::IfText) | Some(NodeKind::ClickText) => {
+                                    let kind_now = self
+                                        .nodes
+                                        .iter()
+                                        .find(|n| n.id == id)
+                                        .map(|n| n.kind)
+                                        .unwrap_or(NodeKind::IfText);
+                                    let mut needle = String::new();
+                                    let mut match_exact = false;
+                                    let mut case_sensitive = false;
+                                    let mut retries = 0_u32;
+                                    let mut retry_ms = 300_u64;
+                                    let mut on_fail = FailAction::Skip;
+                                    if let Some(n) = self.nodes.iter().find(|n| n.id == id) {
+                                        needle = n.needle.clone();
+                                        match_exact = n.match_exact;
+                                        case_sensitive = n.case_sensitive;
+                                        retries = n.retries;
+                                        retry_ms = n.retry_ms;
+                                        on_fail = n.on_fail;
+                                    }
+                                    ui.label(crate::i18n::t("flow.field.needle"));
+                                    props_changed |= ui
+                                        .add(
+                                            egui::TextEdit::singleline(&mut needle)
+                                                .desired_width(180.0),
+                                        )
+                                        .changed();
+                                    props_changed |= theme::themed_checkbox(
+                                        ui,
+                                        &mut match_exact,
+                                        crate::i18n::t("flow.field.match_exact"),
+                                    )
+                                    .changed();
+                                    props_changed |= theme::themed_checkbox(
+                                        ui,
+                                        &mut case_sensitive,
+                                        crate::i18n::t("flow.field.case_sensitive"),
+                                    )
+                                    .changed();
+                                    ui.horizontal(|ui| {
+                                        ui.label(crate::i18n::t("flow.field.retries"));
+                                        props_changed |= ui
+                                            .add(egui::DragValue::new(&mut retries).range(0..=20))
+                                            .changed();
+                                    });
+                                    ui.horizontal(|ui| {
+                                        ui.label(crate::i18n::t("flow.field.retry_ms"));
+                                        props_changed |= ui
+                                            .add(
+                                                egui::DragValue::new(&mut retry_ms)
+                                                    .range(0..=60000),
+                                            )
+                                            .changed();
+                                    });
+                                    if kind_now == NodeKind::ClickText {
+                                        ui.horizontal(|ui| {
+                                            ui.label(crate::i18n::t("flow.field.on_fail"));
+                                            let mut abort = on_fail == FailAction::Abort;
+                                            if theme::themed_checkbox(ui, &mut abort, "失败则中止")
+                                                .changed()
+                                            {
+                                                props_changed = true;
+                                                on_fail = if abort {
+                                                    FailAction::Abort
+                                                } else {
+                                                    FailAction::Skip
+                                                };
+                                            }
+                                        });
+                                        ui.label(
+                                            egui::RichText::new("识别到文字后点击其中心位置")
+                                                .color(col().MUTED),
+                                        );
+                                    } else {
+                                        ui.label(
+                                            egui::RichText::new(
+                                                "上端口=是(找到) · 下端口=否(未找到)\n\
+                                         Windows 用系统 OCR；其它平台需配置 AI",
+                                            )
+                                            .color(col().MUTED),
+                                        );
+                                    }
+                                    if let Some(n) = self.node_mut(id) {
+                                        n.needle = needle;
+                                        n.match_exact = match_exact;
+                                        n.case_sensitive = case_sensitive;
+                                        n.retries = retries;
+                                        n.retry_ms = retry_ms;
+                                        n.on_fail = on_fail;
+                                    }
+                                }
                                 Some(NodeKind::LoopEnd) => {
                                     ui.label(
                                         egui::RichText::new(
@@ -2885,7 +3179,7 @@ impl FlowEditor {
         if let Some(pos) = response.interact_pointer_pos() {
             for n in self.nodes.iter().rev() {
                 let r = n.rect().translate(self.pan + canvas.min.to_vec2());
-                if n.kind == NodeKind::IfVision {
+                if is_if_branch(n.kind) {
                     let t = to_screen(n.out_port_true(), self.pan);
                     let f = to_screen(n.out_port_false(), self.pan);
                     if t.distance(pos) <= PORT_R + 4.0 {
@@ -3105,7 +3399,7 @@ impl FlowEditor {
                 painter.circle_filled(c, PORT_R, col().CANVAS);
                 painter.circle_stroke(c, PORT_R, Stroke::new(2.0, accent));
             }
-            if n.kind == NodeKind::IfVision {
+            if is_if_branch(n.kind) {
                 let t = to_screen(n.out_port_true(), self.pan);
                 let f = to_screen(n.out_port_false(), self.pan);
                 painter.circle_filled(t, PORT_R, Color32::from_rgb(52, 211, 153));

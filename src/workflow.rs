@@ -121,6 +121,26 @@ pub enum StepType {
         then_jump: usize,
         else_jump: usize,
     },
+    /// OCR text condition: true if needle is found on screen.
+    IfText {
+        needle: String,
+        /// `contains` (default) or `exact`.
+        match_exact: bool,
+        case_sensitive: bool,
+        retries: Option<u32>,
+        retry_ms: Option<u64>,
+        then_jump: usize,
+        else_jump: usize,
+    },
+    /// OCR: find needle and click its bounding-box center.
+    ClickText {
+        needle: String,
+        match_exact: bool,
+        case_sensitive: bool,
+        retries: Option<u32>,
+        retry_ms: Option<u64>,
+        on_fail: Option<ClickFailAction>,
+    },
     /// Unconditional jump to absolute step index (compile artifact for branch joins).
     Goto {
         jump: usize,
@@ -196,6 +216,8 @@ pub fn parse_workflow_text(content: &str) -> Result<Vec<WorkflowStep>, String> {
                 "loop_while" | "while_match" => parse_loop_while_line(rest),
                 "loop_end" | "endloop" => StepType::LoopEnd,
                 "if_vision" | "ifvision" => parse_if_vision_line(rest),
+                "if_text" | "iftext" | "ocr_if" => parse_if_text_line(rest),
+                "click_text" | "clicktext" | "ocr_click" => parse_click_text_line(rest),
                 "goto" | "jump" => {
                     let jump = rest.parse::<usize>().unwrap_or(0);
                     StepType::Goto { jump }
@@ -295,6 +317,82 @@ fn parse_if_vision_line(rest: &str) -> StepType {
         retry_ms,
         then_jump,
         else_jump,
+    }
+}
+
+fn parse_text_match_flags(params: Option<&str>) -> (bool, bool) {
+    let match_exact = params
+        .and_then(|p| extract_param(p, "match"))
+        .map(|s| matches!(s.to_ascii_lowercase().as_str(), "exact" | "eq" | "equals"))
+        .or_else(|| {
+            params
+                .and_then(|p| extract_param(p, "exact"))
+                .map(|s| matches!(s.to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        })
+        .unwrap_or(false);
+    let case_sensitive = params
+        .and_then(|p| extract_param(p, "case_sensitive"))
+        .or_else(|| params.and_then(|p| extract_param(p, "case")))
+        .map(|s| matches!(s.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "sensitive"))
+        .unwrap_or(false);
+    (match_exact, case_sensitive)
+}
+
+fn parse_if_text_line(rest: &str) -> StepType {
+    // if_text: 确定 | match=contains | retries=1 | retry_ms=500 | then=3 | else=5
+    let (main, params) = rest
+        .split_once('|')
+        .map(|(a, b)| (a.trim(), Some(b)))
+        .unwrap_or((rest, None));
+    let (match_exact, case_sensitive) = parse_text_match_flags(params);
+    let retries = params
+        .and_then(|p| extract_param(p, "retries"))
+        .and_then(|s| s.parse::<u32>().ok());
+    let retry_ms = params
+        .and_then(|p| extract_param(p, "retry_ms"))
+        .and_then(|s| s.parse::<u64>().ok());
+    let then_jump = params
+        .and_then(|p| extract_param(p, "then"))
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(0);
+    let else_jump = params
+        .and_then(|p| extract_param(p, "else"))
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(0);
+    StepType::IfText {
+        needle: main.to_string(),
+        match_exact,
+        case_sensitive,
+        retries,
+        retry_ms,
+        then_jump,
+        else_jump,
+    }
+}
+
+fn parse_click_text_line(rest: &str) -> StepType {
+    // click_text: 确定 | match=exact | retries=1 | on_fail=skip
+    let (main, params) = rest
+        .split_once('|')
+        .map(|(a, b)| (a.trim(), Some(b)))
+        .unwrap_or((rest, None));
+    let (match_exact, case_sensitive) = parse_text_match_flags(params);
+    let retries = params
+        .and_then(|p| extract_param(p, "retries"))
+        .and_then(|s| s.parse::<u32>().ok());
+    let retry_ms = params
+        .and_then(|p| extract_param(p, "retry_ms"))
+        .and_then(|s| s.parse::<u64>().ok());
+    let on_fail = params
+        .and_then(|p| extract_param(p, "on_fail"))
+        .and_then(|s| ClickFailAction::parse(&s));
+    StepType::ClickText {
+        needle: main.to_string(),
+        match_exact,
+        case_sensitive,
+        retries,
+        retry_ms,
+        on_fail,
     }
 }
 
@@ -434,6 +532,59 @@ pub fn steps_to_text(steps: &[WorkflowStep]) -> String {
                     line.push_str(&format!(" | retry_ms={}", ms));
                 }
                 line.push_str(&format!(" | then={} | else={}", then_jump, else_jump));
+                out.push_str(&line);
+                out.push('\n');
+            }
+            StepType::IfText {
+                needle,
+                match_exact,
+                case_sensitive,
+                retries,
+                retry_ms,
+                then_jump,
+                else_jump,
+            } => {
+                let mut line = format!("if_text: {}", needle);
+                if *match_exact {
+                    line.push_str(" | match=exact");
+                }
+                if *case_sensitive {
+                    line.push_str(" | case_sensitive=true");
+                }
+                if let Some(r) = retries {
+                    line.push_str(&format!(" | retries={}", r));
+                }
+                if let Some(ms) = retry_ms {
+                    line.push_str(&format!(" | retry_ms={}", ms));
+                }
+                line.push_str(&format!(" | then={} | else={}", then_jump, else_jump));
+                out.push_str(&line);
+                out.push('\n');
+            }
+            StepType::ClickText {
+                needle,
+                match_exact,
+                case_sensitive,
+                retries,
+                retry_ms,
+                on_fail,
+            } => {
+                let mut line = format!("click_text: {}", needle);
+                if *match_exact {
+                    line.push_str(" | match=exact");
+                }
+                if *case_sensitive {
+                    line.push_str(" | case_sensitive=true");
+                }
+                if let Some(r) = retries {
+                    line.push_str(&format!(" | retries={}", r));
+                }
+                if let Some(ms) = retry_ms {
+                    line.push_str(&format!(" | retry_ms={}", ms));
+                }
+                if let Some(f) = on_fail {
+                    line.push_str(&format!(" | on_fail={}", f.as_str()));
+                }
                 out.push_str(&line);
                 out.push('\n');
             }
@@ -647,13 +798,80 @@ pub fn parse_steps_json(value: &Value) -> Result<Vec<WorkflowStep>, String> {
                     else_jump,
                 })
             }
+            "if_text" | "iftext" | "ocr_if" => {
+                let needle = obj
+                    .get("needle")
+                    .or_else(|| obj.get("text"))
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| format!("steps[{}].needle is required for if_text", idx))?;
+                let match_exact = obj
+                    .get("match")
+                    .and_then(|v| v.as_str())
+                    .map(|s| matches!(s.to_ascii_lowercase().as_str(), "exact" | "eq" | "equals"))
+                    .or_else(|| obj.get("match_exact").and_then(|v| v.as_bool()))
+                    .unwrap_or(false);
+                let case_sensitive = obj
+                    .get("case_sensitive")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let retries = obj
+                    .get("retries")
+                    .and_then(|v| v.as_u64())
+                    .map(|v| v as u32);
+                let retry_ms = obj.get("retry_ms").and_then(|v| v.as_u64());
+                let then_jump = obj.get("then").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+                let else_jump = obj.get("else").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+                WorkflowStep::new(StepType::IfText {
+                    needle: needle.to_string(),
+                    match_exact,
+                    case_sensitive,
+                    retries,
+                    retry_ms,
+                    then_jump,
+                    else_jump,
+                })
+            }
+            "click_text" | "clicktext" | "ocr_click" => {
+                let needle = obj
+                    .get("needle")
+                    .or_else(|| obj.get("text"))
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| format!("steps[{}].needle is required for click_text", idx))?;
+                let match_exact = obj
+                    .get("match")
+                    .and_then(|v| v.as_str())
+                    .map(|s| matches!(s.to_ascii_lowercase().as_str(), "exact" | "eq" | "equals"))
+                    .or_else(|| obj.get("match_exact").and_then(|v| v.as_bool()))
+                    .unwrap_or(false);
+                let case_sensitive = obj
+                    .get("case_sensitive")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let retries = obj
+                    .get("retries")
+                    .and_then(|v| v.as_u64())
+                    .map(|v| v as u32);
+                let retry_ms = obj.get("retry_ms").and_then(|v| v.as_u64());
+                let on_fail = obj
+                    .get("on_fail")
+                    .and_then(|v| v.as_str())
+                    .and_then(ClickFailAction::parse);
+                WorkflowStep::new(StepType::ClickText {
+                    needle: needle.to_string(),
+                    match_exact,
+                    case_sensitive,
+                    retries,
+                    retry_ms,
+                    on_fail,
+                })
+            }
             "goto" | "jump" => {
                 let jump = obj.get("jump").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
                 WorkflowStep::new(StepType::Goto { jump })
             }
             _ => {
                 return Err(format!(
-                    "steps[{}].type unsupported: {} (use click|wait|type|pause|manual|loop|loop_while|loop_end|if_vision|goto)",
+                    "steps[{}].type unsupported: {} (use click|wait|type|pause|manual|loop|loop_while|loop_end|if_vision|if_text|click_text|goto)",
                     idx, t
                 ))
             }

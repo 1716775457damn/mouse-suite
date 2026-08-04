@@ -1116,24 +1116,22 @@ impl RecorderApp {
                                         .rounding(egui::Rounding::same(8.0))
                                         .inner_margin(egui::Margin::same(16.0))
                                         .show(ui, |ui| {
-                                            ui.label(
-                                                egui::RichText::new("元素资源")
-                                                    .size(16.0)
-                                                    .strong()
-                                                    .color(theme::col().TEXT),
-                                            );
+                                            ui.horizontal(|ui| {
+                                                ui.label(
+                                                    egui::RichText::new("元素资源")
+                                                        .size(16.0)
+                                                        .strong()
+                                                        .color(theme::col().TEXT),
+                                                );
+                                                ui.add_space(4.0);
+                                                theme::badge(ui, self.elements.len());
+                                            });
                                             ui.label(
                                                 egui::RichText::new("视觉自动化素材库")
                                                     .size(11.0)
                                                     .color(theme::col().MUTED),
                                             );
                                             ui.add_space(8.0);
-                                            theme::status_pill(
-                                                ui,
-                                                &format!("{} 个已录制元素", self.elements.len()),
-                                                theme::StatusTone::Idle,
-                                            );
-                                            ui.add_space(14.0);
                                             egui::Frame::none()
                                                 .fill(theme::col().ACCENT_HOT)
                                                 .rounding(egui::Rounding::same(8.0))
@@ -1433,6 +1431,15 @@ impl RecorderApp {
                                                                             2.0,
                                                                             theme::col().ACCENT,
                                                                         ),
+                                                                    );
+                                                                    // Left accent bar
+                                                                    ui.painter().rect_filled(
+                                                                        egui::Rect::from_min_size(
+                                                                            resp.response.rect.min,
+                                                                            egui::vec2(3.0, resp.response.rect.height()),
+                                                                        ),
+                                                                        egui::Rounding { nw: 8.0, sw: 8.0, ne: 0.0, se: 0.0 },
+                                                                        theme::col().ACCENT,
                                                                     );
                                                                 } else if click.hovered() {
                                                                     ui.painter().rect_stroke(
