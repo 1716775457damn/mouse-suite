@@ -40,7 +40,7 @@ Both paths are relative to the executable directory.
 - `scribe_start`
 - `scribe_stop`
 - `scribe_export_html` (`args.path`)
-- `scribe_to_flow` (会话步骤 → 流程图人工节点草稿)
+- `scribe_to_flow` (会话步骤 → 从截图导入点击模板 + 生成点击流程图)
 - `recorder_refresh`
 - `recorder_export_csv` (`args.name`)
 - `recorder_set_hide_wait_ms` (`args.ms` 500–3000)

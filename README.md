@@ -49,7 +49,7 @@ Windows-first desktop automation suite that combines:
 2. 在目标软件里左键点击（点击本程序窗口会被忽略）
 3. **停止录制**（F8 / **Ctrl+Alt+F10**）后编辑标题/说明
 4. **AI 写说明**（「AI 设置」对齐 clickscribe：CC Switch `:15721` Anthropic / 智谱 / 自定义；配置在 `data/ai_config.json`）
-5. **生成流程图** → 自动切到流程图页（人工介入节点草稿）
+5. **生成流程图** → 从各步截图裁出点击模板并导入元素库，生成可运行的**点击**流程图（自动切到流程图页）
 6. 导出 **HTML** / **Markdown** / **JSON**；会话在 `data/scribe_sessions/`
 7. 会话右键可 **复制 / 删除**
 

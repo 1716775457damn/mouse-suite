@@ -55,6 +55,38 @@ fn default_scale() -> f64 {
     1.0
 }
 
+fn sanitize_element_name(raw: &str, fallback: &str) -> String {
+    let cleaned: String = raw
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '_' || c == '-' || ('\u{4e00}'..='\u{9fff}').contains(&c)
+            {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let cleaned = cleaned.trim_matches('_').chars().take(40).collect::<String>();
+    if cleaned.is_empty() {
+        fallback.to_string()
+    } else {
+        cleaned
+    }
+}
+
+/// One screenshot crop to import as a click template before building the flow.
+#[derive(Clone)]
+pub struct ScribeFlowImport {
+    pub element_name: String,
+    pub image_path: PathBuf,
+    /// Pixel coords inside the screenshot image.
+    pub px: i32,
+    pub py: i32,
+    pub screen_w: u32,
+    pub screen_h: u32,
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ScribeSession {
     pub id: String,
@@ -83,6 +115,10 @@ pub struct ScribeApp {
     ai_busy: Arc<AtomicBool>,
     ai_job: Option<Receiver<Result<Vec<String>, String>>>,
     pending_flow: Option<Vec<WorkflowStep>>,
+    /// Templates to import into the element library before building Click nodes.
+    pending_imports: Option<Vec<ScribeFlowImport>>,
+    /// Suggested flow title when applying the pending click draft.
+    pending_flow_title: Option<String>,
     rename_buf: String,
     /// Step index open in click-to-zoom lightbox.
     lightbox: Option<usize>,
@@ -135,6 +171,8 @@ impl ScribeApp {
             ai_busy: Arc::new(AtomicBool::new(false)),
             ai_job: None,
             pending_flow: None,
+            pending_imports: None,
+            pending_flow_title: None,
             rename_buf: String::new(),
             lightbox: None,
             lightbox_tex: None,
@@ -166,6 +204,14 @@ impl ScribeApp {
 
     pub fn take_pending_flow(&mut self) -> Option<Vec<WorkflowStep>> {
         self.pending_flow.take()
+    }
+
+    pub fn take_pending_imports(&mut self) -> Option<Vec<ScribeFlowImport>> {
+        self.pending_imports.take()
+    }
+
+    pub fn take_pending_flow_title(&mut self) -> Option<String> {
+        self.pending_flow_title.take()
     }
 
     /// Update ignore region; cleared while minimized recording so clicks are free.
@@ -558,34 +604,64 @@ impl ScribeApp {
         }
     }
 
+    /// Build a click-flow draft: each doc step → element template + Click node.
     pub fn build_flow_draft(&mut self) {
         let Some(sess) = self.session.as_ref() else {
             self.status = "请先打开会话".into();
             return;
         };
-        let mut steps = Vec::new();
-        for (i, st) in sess.steps.iter().enumerate() {
-            let msg = if st.title.is_empty() {
-                format!("第 {} 步", i + 1)
-            } else {
-                st.title.clone()
-            };
-            let instruction = if st.description.trim().is_empty() {
-                None
-            } else {
-                Some(st.description.clone())
-            };
-            steps.push(WorkflowStep::new(StepType::Manual {
-                message: msg,
-                instruction,
-            }));
-        }
-        if steps.is_empty() {
+        if sess.steps.is_empty() {
             self.status = "没有步骤可生成流程图".into();
             return;
         }
+
+        let stamp = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
+        let img_dir = Self::session_images(&sess.id);
+        let mut steps = Vec::new();
+        let mut imports = Vec::new();
+        let mut used_names = std::collections::HashSet::new();
+
+        for (i, st) in sess.steps.iter().enumerate() {
+            let fallback = format!("doc_{stamp}_{:03}", i + 1);
+            let mut name = sanitize_element_name(&st.title, &fallback);
+            if !used_names.insert(name.clone()) {
+                name = format!("{name}_{:03}", i + 1);
+                used_names.insert(name.clone());
+            }
+
+            let scale = if st.scale > 0.0 { st.scale } else { 1.0 };
+            let px = ((st.x as f64) * scale).round() as i32;
+            let py = ((st.y as f64) * scale).round() as i32;
+            let image_path = img_dir.join(&st.screenshot);
+            imports.push(ScribeFlowImport {
+                element_name: name.clone(),
+                image_path,
+                px,
+                py,
+                screen_w: st.img_w,
+                screen_h: st.img_h,
+            });
+
+            steps.push(WorkflowStep::new(StepType::Click {
+                element_name: name,
+                or_elements: Vec::new(),
+                threshold: Some(0.85),
+                pure_vision: Some(true),
+                retries: Some(0),
+                retry_ms: Some(300),
+                on_fail: Some(crate::workflow::ClickFailAction::Skip),
+            }));
+        }
+
+        let title = if sess.title.trim().is_empty() {
+            format!("文档点击流程 (×{})", steps.len())
+        } else {
+            format!("{} (×{})", sess.title.trim(), steps.len())
+        };
+        self.pending_flow_title = Some(title);
+        self.pending_imports = Some(imports);
         self.pending_flow = Some(steps);
-        self.status = "已生成流程图草稿".into();
+        self.status = "已生成点击流程图草稿".into();
     }
 
     pub fn agent_start(&mut self, ctx: &egui::Context) -> Result<(), String> {

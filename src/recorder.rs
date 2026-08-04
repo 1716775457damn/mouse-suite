@@ -541,6 +541,61 @@ impl RecorderApp {
         Ok(())
     }
 
+    /// Crop a click template from an existing screenshot (操作文档 → 点击流程).
+    /// `px`/`py` are pixel coords inside the image (after `scale`); `sw`/`sh` are
+    /// the capture dimensions used for ROI scaling at runtime.
+    pub fn save_template_from_image(
+        &mut self,
+        name: &str,
+        image_path: &std::path::Path,
+        px: i32,
+        py: i32,
+        sw: u32,
+        sh: u32,
+    ) -> Result<(), String> {
+        const HALF_W: i32 = 80;
+        const HALF_H: i32 = 48;
+        let img = image::open(image_path)
+            .map_err(|e| format!("open screenshot: {e}"))?
+            .into_rgba8();
+        let iw = img.width() as i32;
+        let ih = img.height() as i32;
+        let lx = px.clamp(0, iw.saturating_sub(1));
+        let ly = py.clamp(0, ih.saturating_sub(1));
+        let x1 = (lx - HALF_W).max(0);
+        let y1 = (ly - HALF_H).max(0);
+        let x2 = (lx + HALF_W).min(iw);
+        let y2 = (ly + HALF_H).min(ih);
+        if x2 - x1 < 8 || y2 - y1 < 8 {
+            return Err("crop too small".into());
+        }
+        let cw = (x2 - x1) as u32;
+        let ch = (y2 - y1) as u32;
+        let cropped = image::imageops::crop_imm(&img, x1 as u32, y1 as u32, cw, ch).to_image();
+        let state_name = "-n";
+        let dest = std::path::Path::new(&self.image_dir).join(format!("{}_{}.png", name, state_name));
+        cropped
+            .save(&dest)
+            .map_err(|e| format!("save template: {e}"))?;
+        let meta_w = if sw > 0 { sw } else { img.width() };
+        let meta_h = if sh > 0 { sh } else { img.height() };
+        upsert_elem(
+            &self.conn,
+            name,
+            state_name,
+            x1,
+            y1,
+            x2,
+            y2,
+            &dest.to_string_lossy(),
+            meta_w,
+            meta_h,
+        )?;
+        self.refresh();
+        self.status = format!("已从文档截图导入模板「{}」", name);
+        Ok(())
+    }
+
     /// Agent entrypoint: start add-state capture for current element.
     pub fn agent_start_add_state_capture(
         &mut self,

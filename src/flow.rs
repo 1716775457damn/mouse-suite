@@ -689,6 +689,11 @@ impl FlowEditor {
         self.status = s.into();
     }
 
+    pub fn set_meta(&mut self, title: impl Into<String>, description: impl Into<String>) {
+        self.title = title.into();
+        self.description = description.into();
+    }
+
     /// Top-of-screen HUD while click-recording (main window minimized).
     pub fn paint_click_record_hud(&mut self, ctx: &egui::Context) {
         if !self.click_recording {

@@ -89,6 +89,66 @@ impl SuiteApp {
         cfg.save();
     }
 
+    /// Import scribe screenshot crops as click templates, then build a Click flow.
+    /// Returns `(step_count, imported_ok, import_failed)`.
+    fn apply_pending_scribe_flow(&mut self) -> Option<(usize, usize, usize)> {
+        let steps = self.scribe.take_pending_flow()?;
+        let imports = self.scribe.take_pending_imports().unwrap_or_default();
+        let title = self
+            .scribe
+            .take_pending_flow_title()
+            .unwrap_or_else(|| format!("文档点击流程 (×{})", steps.len()));
+
+        let mut imported = 0usize;
+        let mut failed = 0usize;
+        let mut errs = Vec::new();
+        for job in &imports {
+            if !job.image_path.exists() {
+                failed += 1;
+                errs.push(format!("{}: 截图缺失", job.element_name));
+                continue;
+            }
+            match self.recorder.save_template_from_image(
+                &job.element_name,
+                &job.image_path,
+                job.px,
+                job.py,
+                job.screen_w,
+                job.screen_h,
+            ) {
+                Ok(()) => imported += 1,
+                Err(e) => {
+                    failed += 1;
+                    errs.push(format!("{}: {e}", job.element_name));
+                }
+            }
+        }
+
+        self.flow.set_meta(
+            title,
+            "由操作文档步骤生成的点击流程（模板已导入元素库），可继续编辑",
+        );
+        self.flow.agent_build_from_steps(&steps);
+        self.flow.agent_auto_layout();
+        if failed > 0 {
+            self.flow.set_status(format!(
+                "已生成点击流程 {} 步（导入 {}，失败 {}：{}）",
+                steps.len(),
+                imported,
+                failed,
+                errs.join("; ")
+            ));
+        } else {
+            self.flow.set_status(format!(
+                "已生成点击流程 {} 步，已导入 {} 个模板",
+                steps.len(),
+                imported
+            ));
+        }
+        self.tab = Tab::Flow;
+        Some((steps.len(), imported, failed))
+    }
+
     fn value_str<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
         args.get(key).and_then(|v| v.as_str())
     }
@@ -216,16 +276,25 @@ impl SuiteApp {
             }
             "scribe_to_flow" => {
                 self.scribe.build_flow_draft();
-                if let Some(steps) = self.scribe.take_pending_flow() {
-                    self.flow.agent_build_from_steps(&steps);
-                    self.flow.agent_auto_layout();
-                    self.tab = Tab::Flow;
-                    make_ok(
-                        "flow draft built".into(),
-                        Some(json!({ "nodes": steps.len() + 2 })),
-                    )
-                } else {
-                    make_err("no session or empty steps".into())
+                match self.apply_pending_scribe_flow() {
+                    Some((n, imported, failed)) => make_ok(
+                        format!(
+                            "click flow built ({} steps, {} templates imported{})",
+                            n,
+                            imported,
+                            if failed > 0 {
+                                format!(", {} failed", failed)
+                            } else {
+                                String::new()
+                            }
+                        ),
+                        Some(json!({
+                            "nodes": n + 2,
+                            "templates_imported": imported,
+                            "templates_failed": failed
+                        })),
+                    ),
+                    None => make_err("no session or empty steps".into()),
                 }
             }
             "recorder_refresh" => {
@@ -879,11 +948,7 @@ impl eframe::App for SuiteApp {
             }
         }
 
-        if let Some(steps) = self.scribe.take_pending_flow() {
-            self.flow.agent_build_from_steps(&steps);
-            self.flow.agent_auto_layout();
-            self.tab = Tab::Flow;
-        }
+        let _ = self.apply_pending_scribe_flow();
 
         self.recorder.tick_hide_then_capture(ctx);
 
