@@ -21,6 +21,9 @@ mkdir -p "$PKG_ROOT/usr/local/bin"
 mkdir -p "$PKG_ROOT/usr/local/share/mouse-suite"
 mkdir -p "$PKG_ROOT/usr/share/applications"
 mkdir -p "$PKG_ROOT/usr/share/doc/mouse-suite"
+mkdir -p "$PKG_ROOT/usr/share/icons/hicolor/48x48/apps"
+mkdir -p "$PKG_ROOT/usr/share/icons/hicolor/128x128/apps"
+mkdir -p "$PKG_ROOT/usr/share/icons/hicolor/256x256/apps"
 
 install -m 755 "$BINARY" "$PKG_ROOT/usr/local/bin/mouse-suite"
 cp "$ROOT/config.toml" "$PKG_ROOT/usr/local/share/mouse-suite/" 2>/dev/null || true
@@ -31,12 +34,21 @@ if [[ -d "$ROOT/workflows" ]]; then
   cp -R "$ROOT/workflows" "$PKG_ROOT/usr/local/share/mouse-suite/"
 fi
 
+ICON_ROOT="$ROOT/packaging/linux/hicolor"
+for size in 48 128 256; do
+  src="$ICON_ROOT/${size}x${size}/apps/mouse-suite.png"
+  if [[ -f "$src" ]]; then
+    cp "$src" "$PKG_ROOT/usr/share/icons/hicolor/${size}x${size}/apps/mouse-suite.png"
+  fi
+done
+
 cat > "$PKG_ROOT/usr/share/applications/mouse-suite.desktop" <<EOF
 [Desktop Entry]
 Type=Application
 Name=Mouse Suite
 Comment=Recorder, clicker, flow editor, and agent bridge
 Exec=/usr/local/bin/mouse-suite
+Icon=mouse-suite
 Terminal=false
 Categories=Utility;Development;
 EOF
@@ -52,7 +64,8 @@ Installed-Size: ${SIZE_KB}
 Maintainer: Mouse Suite <noreply@users.noreply.github.com>
 Homepage: https://github.com/1716775457damn/mouse-suite
 Description: Desktop automation suite (recorder, clicker, flow, agent bridge)
- Experimental Linux build. GUI available; click injection is stubbed.
+ Cross-platform build with GUI, recording, and click injection.
+ On Linux, grant input device access (user in 'input' group) for global hooks.
 EOF
 
 mkdir -p "$OUTDIR"

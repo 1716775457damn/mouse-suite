@@ -79,8 +79,9 @@ cargo build --release
 ## Requirements
 
 - Rust 1.80+
-- Windows 10/11 for full mouse automation features
-- Linux / macOS builds are experimental (GUI available; click injection is stubbed)
+- Windows 10/11 (full automation)
+- macOS 11+ (Apple Silicon + Intel) — grant **Screen Recording** and **Accessibility** on first use
+- Linux (X11 recommended) — add your user to the `input` group for global mouse hooks
 
 ## Build
 

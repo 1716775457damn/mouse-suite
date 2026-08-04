@@ -1,11 +1,12 @@
 [package]
 name = "mouse-suite"
-version = "0.2.6"
+version = "0.2.7"
 edition = "2021"
 description = "Recorder + clicker + visual workflow editor with agent bridge"
 license = "MIT"
 repository = "https://github.com/1716775457damn/mouse-suite"
 readme = "README.md"
+build = "build.rs"
 
 [dependencies]
 eframe = "0.30"
@@ -21,6 +22,10 @@ rfd = "0.15"
 ureq = { version = "2.12", features = ["json"] }
 base64 = "0.22"
 
+[target.'cfg(not(windows))'.dependencies]
+enigo = "0.3"
+global-hotkey = "0.6"
+
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.52", features = [
     "Win32_UI_Input_KeyboardAndMouse",
@@ -28,6 +33,9 @@ windows = { version = "0.52", features = [
     "Win32_Graphics_Gdi",
     "Win32_Foundation"
 ] }
+
+[target.'cfg(windows)'.build-dependencies]
+winres = "0.1"
 
 [profile.release]
 opt-level = "z"

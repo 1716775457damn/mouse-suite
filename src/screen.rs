@@ -42,12 +42,12 @@ pub fn cursor_pos() -> (i32, i32) {
         unsafe {
             let _ = GetCursorPos(&mut pt);
         }
-        (pt.x, pt.y)
+        if pt.x != 0 || pt.y != 0 {
+            return (pt.x, pt.y);
+        }
     }
-    #[cfg(not(windows))]
-    {
-        (0, 0)
-    }
+    // Shared with mouse_hook on all platforms (and Windows fallback).
+    crate::mouse_hook::last_cursor_pos()
 }
 
 fn monitor_contains(mon: &Monitor, x: i32, y: i32) -> bool {

@@ -195,8 +195,9 @@ jobs:
 
             ### Notes
 
-            - Windows: full recorder / clicker / flow / agent bridge
-            - Linux / macOS: experimental (GUI + agent bridge; click injection stubbed)
+            - Windows / macOS / Linux: recorder, clicker, flow, scribe, agent bridge
+            - macOS: grant Screen Recording + Accessibility (System Settings → Privacy)
+            - Linux: X11 recommended; add user to `input` group for global hooks
             - macOS builds are **ad-hoc signed** (not Apple-notarized). On first open: right-click → Open, or allow under System Settings → Privacy & Security
 
             See `AGENT_BRIDGE.md` for agent automation API.

@@ -2115,7 +2115,21 @@ fn screen_size() -> (i32, i32) {
 
 #[cfg(not(windows))]
 fn screen_size() -> (i32, i32) {
-    (1920, 1080)
+    use xcap::Monitor;
+    let Ok(mons) = Monitor::all() else {
+        return (1920, 1080);
+    };
+    let mut max_x = 1i32;
+    let mut max_y = 1i32;
+    for m in mons {
+        let x = m.x().unwrap_or(0);
+        let y = m.y().unwrap_or(0);
+        let w = m.width().unwrap_or(0) as i32;
+        let h = m.height().unwrap_or(0) as i32;
+        max_x = max_x.max(x + w);
+        max_y = max_y.max(y + h);
+    }
+    (max_x.max(1920), max_y.max(1080))
 }
 
 #[cfg(windows)]
@@ -2161,8 +2175,19 @@ fn click_at(x: i32, y: i32) {
 
 #[cfg(not(windows))]
 fn click_at(x: i32, y: i32) {
-    // Experimental non-Windows build: click injection is not implemented yet.
-    let _ = (x, y);
+    use enigo::{Button, Coordinate, Direction, Enigo, Mouse, Settings};
+    let Ok(mut enigo) = Enigo::new(&Settings::default()) else {
+        eprintln!("[clicker] enigo init failed");
+        return;
+    };
+    if let Err(e) = enigo.move_mouse(x, y, Coordinate::Abs) {
+        eprintln!("[clicker] move_mouse failed: {e:?}");
+        return;
+    }
+    thread::sleep(Duration::from_millis(20));
+    if let Err(e) = enigo.button(Button::Left, Direction::Click) {
+        eprintln!("[clicker] click failed: {e:?}");
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -3236,7 +3261,80 @@ fn send_unicode_char(ch: char) {
 }
 
 #[cfg(not(windows))]
-fn send_unicode_char(_ch: char) {}
+fn send_unicode_char(ch: char) {
+    use enigo::{Enigo, Keyboard, Settings};
+    let Ok(mut enigo) = Enigo::new(&Settings::default()) else {
+        return;
+    };
+    let _ = enigo.text(&ch.to_string());
+}
+
+#[cfg(not(windows))]
+fn vk_to_enigo_key(vk: u16) -> Option<enigo::Key> {
+    use enigo::Key;
+    Some(match vk {
+        0x08 => Key::Backspace,
+        0x09 => Key::Tab,
+        0x0D => Key::Return,
+        0x1B => Key::Escape,
+        0x20 => Key::Space,
+        0x25 => Key::LeftArrow,
+        0x26 => Key::UpArrow,
+        0x27 => Key::RightArrow,
+        0x28 => Key::DownArrow,
+        0x2E => Key::Delete,
+        0x10 => Key::Shift,
+        0x11 => Key::Control,
+        0x12 => Key::Alt,
+        0x5B | 0x5C => Key::Meta,
+        0x70 => Key::F1,
+        0x71 => Key::F2,
+        0x72 => Key::F3,
+        0x73 => Key::F4,
+        0x74 => Key::F5,
+        0x75 => Key::F6,
+        0x76 => Key::F7,
+        0x77 => Key::F8,
+        0x78 => Key::F9,
+        0x79 => Key::F10,
+        0x7A => Key::F11,
+        0x7B => Key::F12,
+        b @ 0x30..=0x39 => Key::Unicode(b as u8 as char),
+        b @ 0x41..=0x5A => Key::Unicode((b as u8 + 32) as char),
+        _ => return None,
+    })
+}
+
+#[cfg(not(windows))]
+fn send_vk_tap(vk: u16) {
+    use enigo::{Direction, Enigo, Keyboard, Settings};
+    let Some(key) = vk_to_enigo_key(vk) else {
+        return;
+    };
+    let Ok(mut enigo) = Enigo::new(&Settings::default()) else {
+        return;
+    };
+    let _ = enigo.key(key, Direction::Click);
+}
+
+#[cfg(not(windows))]
+fn send_vk_chord(mods: &[u16], key: u16) {
+    use enigo::{Direction, Enigo, Keyboard, Settings};
+    let Some(main) = vk_to_enigo_key(key) else {
+        return;
+    };
+    let Ok(mut enigo) = Enigo::new(&Settings::default()) else {
+        return;
+    };
+    let mod_keys: Vec<_> = mods.iter().filter_map(|m| vk_to_enigo_key(*m)).collect();
+    for m in &mod_keys {
+        let _ = enigo.key(*m, Direction::Press);
+    }
+    let _ = enigo.key(main, Direction::Click);
+    for m in mod_keys.iter().rev() {
+        let _ = enigo.key(*m, Direction::Release);
+    }
+}
 
 #[cfg(windows)]
 fn send_vk_tap(vk: u16) {
@@ -3268,9 +3366,6 @@ fn send_vk_tap(vk: u16) {
         let _ = SendInput(&[down, up], std::mem::size_of::<INPUT>() as i32);
     }
 }
-
-#[cfg(not(windows))]
-fn send_vk_tap(_vk: u16) {}
 
 #[cfg(windows)]
 fn send_vk_chord(mods: &[u16], key: u16) {
@@ -3331,6 +3426,3 @@ fn send_vk_chord(mods: &[u16], key: u16) {
         let _ = SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
     }
 }
-
-#[cfg(not(windows))]
-fn send_vk_chord(_mods: &[u16], _key: u16) {}

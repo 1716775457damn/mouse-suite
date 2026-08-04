@@ -1,4 +1,4 @@
-//! Global hotkeys (Windows): workflow start/stop + scribe record toggle.
+//! Global hotkeys: workflow start/stop + scribe record toggle.
 
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread;
@@ -39,7 +39,53 @@ fn spawn_listener(tx: Sender<HotkeyEvent>) {
     }
     #[cfg(not(windows))]
     {
-        let _ = tx;
+        thread::spawn(move || cross_hotkey_loop(tx));
+    }
+}
+
+#[cfg(not(windows))]
+fn cross_hotkey_loop(tx: Sender<HotkeyEvent>) {
+    use global_hotkey::hotkey::{Code, HotKey, Modifiers};
+    use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
+
+    let Ok(manager) = GlobalHotKeyManager::new() else {
+        eprintln!("[hotkeys] GlobalHotKeyManager init failed");
+        return;
+    };
+
+    let start = HotKey::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::F9);
+    let stop = HotKey::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::F10);
+    let scribe = HotKey::new(None, Code::F8);
+
+    if let Err(e) = manager.register(start) {
+        eprintln!("[hotkeys] register Start failed: {e:?}");
+    }
+    if let Err(e) = manager.register(stop) {
+        eprintln!("[hotkeys] register Stop failed: {e:?}");
+    }
+    if let Err(e) = manager.register(scribe) {
+        eprintln!("[hotkeys] register ScribeToggle failed: {e:?}");
+    }
+
+    let receiver = GlobalHotKeyEvent::receiver();
+    while let Ok(event) = receiver.recv() {
+        if event.state != HotKeyState::Pressed {
+            continue;
+        }
+        let ev = if event.id == start.id() {
+            Some(HotkeyEvent::Start)
+        } else if event.id == stop.id() {
+            Some(HotkeyEvent::Stop)
+        } else if event.id == scribe.id() {
+            Some(HotkeyEvent::ScribeToggle)
+        } else {
+            None
+        };
+        if let Some(ev) = ev {
+            if tx.send(ev).is_err() {
+                break;
+            }
+        }
     }
 }
 

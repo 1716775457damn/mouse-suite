@@ -53,6 +53,11 @@ elif [[ -f "$ROOT/packaging/macos/AppIcon.icns" ]]; then
   cp "$ROOT/packaging/macos/AppIcon.icns" "$APP/Contents/Resources/"
 fi
 
+if [[ ! -f "$APP/Contents/Resources/AppIcon.icns" ]]; then
+  echo "ERROR: AppIcon.icns was not produced" >&2
+  exit 1
+fi
+
 # Default config into Resources (read-only); runtime writes to Application Support
 if [[ -f "$ROOT/config.toml" ]]; then
   cp "$ROOT/config.toml" "$APP/Contents/Resources/config.toml"
